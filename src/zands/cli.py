@@ -1,4 +1,4 @@
-"""`zands` command line: ingest, embed, search, ask, fact, eval, ui, schedule, stats."""
+"""`zands` command line: ingest, embed, search, ask, fact, digest, eval, ui, schedule, mcp, stats."""
 
 from __future__ import annotations
 
@@ -10,12 +10,14 @@ import sys
 import textwrap
 from datetime import date
 
+from . import digest as digestlib
 from . import facts as factlib
 from . import schedule as sched
 from . import store
 from .answer import DEFAULT_NUM_CTX, OllamaError, build_messages, default_model, default_ollama_url, stream_chat
 from .embed import EmbedError, OllamaEmbedder, default_embed_model, embed_pending, rebuild
 from .ingest import load_feeds, run_ingest
+from .route import ROUTES, default_router_model
 from .search import DEFAULT_K, DEFAULT_MODE, MODES, RECENCY_WEIGHT, retrieve
 
 
@@ -55,6 +57,11 @@ def cmd_ingest(args: argparse.Namespace) -> int:
             print(f"embedding skipped: {report.embed_error} (keyword search still works; next run retries)")
         else:
             print(f"embedded {report.embedded} new chunks")
+    try:
+        d = digestlib.refresh(conn)
+        print(f"digest: {len(d.stories)} top stories from {d.article_count} articles in the last {d.hours}h")
+    except Exception as exc:  # noqa: BLE001 - the digest is a nice-to-have
+        print(f"digest not rebuilt: {exc}")
     # Exit non-zero only if every feed failed, so a scheduler can alert on a dead network.
     return 1 if report.feeds and len(report.failed) == len(report.feeds) else 0
 
@@ -81,10 +88,19 @@ def cmd_embed(args: argparse.Namespace) -> int:
 
 def _retrieve(args: argparse.Namespace, conn, command: str):
     embedder = _embedder(args) if args.mode != "keyword" else None
-    r = retrieve(conn, args.question, k=args.k, mode=args.mode, embedder=embedder, recency_weight=args.recency, command=command)
+    r = retrieve(conn, args.question, k=args.k, mode=args.mode, embedder=embedder, recency_weight=args.recency,
+                 command=command, reranker=_reranker(args))
     if r.note:
         print(f"note: {r.note}; using keyword search", file=sys.stderr)
     return r
+
+
+def _reranker(args: argparse.Namespace):
+    if not getattr(args, "rerank", False):
+        return None
+    from .rerank import LLMReranker
+
+    return LLMReranker(model=getattr(args, "model", None), base_url=args.ollama_url)
 
 
 def _print_hits(hits) -> None:
@@ -113,37 +129,65 @@ def cmd_search(args: argparse.Namespace) -> int:
     return 0
 
 
+def _print_sources(hits, prefix: str = "") -> None:
+    """One line per article; chunks of the same article share it, e.g. [1,2]."""
+    groups: dict[str, list[int]] = {}
+    first: dict[str, object] = {}
+    for i, h in enumerate(hits, 1):
+        groups.setdefault(h.url, []).append(i)
+        first.setdefault(h.url, h)
+    for url, nums in groups.items():
+        h = first[url]
+        label = ",".join(f"{prefix}{n}" for n in nums)
+        when = (h.published_at or "")[:10]
+        print(f"  [{label}] {when + ' · ' if when else ''}{h.source} · {h.title}\n      {url}")
+
+
 def cmd_ask(args: argparse.Namespace) -> int:
+    from .ask import plan
+
     conn = store.connect(args.db)
-    r = _retrieve(args, conn, "ask")
-    relevant = [] if args.no_facts else factlib.relevant_facts(conn, args.question)
-    if r.log_id is not None:
-        store.set_log_facts(conn, r.log_id, [f.id for f in relevant])
-    if not r.hits and not relevant:
-        print("No articles or facts in the local database match that question, so there is nothing to answer from.")
-        print("Try different keywords, or run `zands ingest` to fetch fresh news.")
+    p = plan(
+        conn, args.question, k=args.k, mode=args.mode,
+        embedder=_embedder(args) if args.mode != "keyword" else None,
+        recency_weight=args.recency, use_router=not args.no_router,
+        forced_route=None if args.route == "auto" else args.route,
+        router_model=args.router_model, ollama_url=args.ollama_url,
+        web_enabled=not args.no_web, web_save=args.save_web,
+        use_facts=not args.no_facts, use_digest=not args.no_digest,
+    )
+    print(f"route: {p.route} ({p.decision.reason})", file=sys.stderr)
+    if p.retrieval and p.retrieval.note:
+        print(f"note: {p.retrieval.note}; using keyword search", file=sys.stderr)
+    if p.web and p.web.error:
+        print(f"note: web fallback: {p.web.error}", file=sys.stderr)
+    if p.messages is None:
+        print(p.reply)
         return 1
-    messages = build_messages(args.question, r.hits, facts=relevant)
     if args.show_prompt:
-        for m in messages:
+        for m in p.messages:
             print(f"--- {m['role']} ---\n{m['content']}\n")
         print("--- answer ---")
     try:
-        for piece in stream_chat(messages, model=args.model, base_url=args.ollama_url, num_ctx=args.num_ctx):
+        for piece in stream_chat(p.messages, model=args.model, base_url=args.ollama_url, num_ctx=args.num_ctx):
             sys.stdout.write(piece)
             sys.stdout.flush()
     except OllamaError as exc:
         print(f"\nerror: {exc}", file=sys.stderr)
         return 2
     print("\n")
-    if relevant:
+    if p.facts:
         print("Verified facts:")
-        for i, f in enumerate(relevant, 1):
+        for i, f in enumerate(p.facts, 1):
             print(f"  [F{i}] {f.subject} | {f.attribute}: {f.value} (since {f.valid_from})")
-    if r.hits:
-        print(f"Sources ({r.mode}):")
-        for i, h in enumerate(r.hits, 1):
-            print(f"  [{i}] {(h.published_at or '????-??-??')[:10]} · {h.source} · {h.title}\n      {h.url}")
+    if p.hits:
+        print(f"Sources ({p.retrieval.mode}):")
+        _print_sources(p.hits)
+    if p.web_hits:
+        print("Web results (SearXNG):" + (f" saved {p.web.saved} pages to the index" if p.web.saved else ""))
+        _print_sources(p.web_hits, prefix="W")
+    if p.digest and p.route != "knowledge" and not (p.hits or p.web_hits):
+        print("(headlines from today's digest were in the prompt)")
     return 0
 
 
@@ -197,6 +241,8 @@ def cmd_fact_expire(args: argparse.Namespace) -> int:
 def cmd_eval(args: argparse.Namespace) -> int:
     from .evaluate import load_questions, run_mode
 
+    if args.routes:
+        return _eval_routes(args)
     conn = store.connect(args.db)
     questions = load_questions(args.questions)
     modes = MODES[:2] if args.mode == "compare" else (args.mode,)
@@ -210,7 +256,8 @@ def cmd_eval(args: argparse.Namespace) -> int:
     reports = []
     for mode in modes:
         rep = run_mode(conn, questions, mode, k=args.k, embedder=embedder,
-                       answer_fn=answer_fn if (args.answers and mode == modes[0]) else None)
+                       answer_fn=answer_fn if (args.answers and mode == modes[0]) else None,
+                       reranker=_reranker(args) if mode != "keyword" else None)
         reports.append(rep)
 
     if args.verbose_results:
@@ -233,6 +280,42 @@ def cmd_eval(args: argparse.Namespace) -> int:
     for rep in reports:
         if rep.answer_rate is not None:
             print(f"\nanswer check ({rep.mode}): {rep.answer_rate:.0%} of answers contain an expected keyword")
+    return 0
+
+
+def _eval_routes(args: argparse.Namespace) -> int:
+    from .evaluate import load_routes, run_routes
+
+    cases = load_routes(args.routes_file)
+    rep = run_routes(cases, use_model=not args.no_router, model=args.router_model, base_url=args.ollama_url)
+    for r in rep.results:
+        mark = "ok " if r.ok else "BAD"
+        print(f"  {mark} expect {r.case.expect:<9} got {r.got.route:<9} [{r.got.method}] {r.case.q}")
+    print(f"\nrouter: {rep.correct}/{len(rep.results)} correct ({rep.accuracy:.0%}); "
+          f"{rep.by_method.get('rule', 0)} by rule, {rep.by_method.get('model', 0)} by model, "
+          f"{rep.by_method.get('default', 0)} defaulted")
+    return 0
+
+
+# ---------------------------------------------------------------- digest / mcp
+
+
+def cmd_digest(args: argparse.Namespace) -> int:
+    conn = store.connect(args.db)
+    if args.refresh or digestlib.latest(conn) is None:
+        print(digestlib.refresh(conn, hours=args.hours).text)
+    else:
+        print(digestlib.latest(conn)["text"])
+    return 0
+
+
+def cmd_mcp(args: argparse.Namespace) -> int:
+    from .mcp_server import run
+
+    if not os.path.isabs(args.db):
+        print(f"note: --db {args.db!r} is relative to {os.getcwd()}; MCP clients should pass an absolute path",
+              file=sys.stderr)
+    run(args.db)
     return 0
 
 
@@ -302,6 +385,8 @@ def cmd_stats(args: argparse.Namespace) -> int:
     print(f"vectors:    {vec}")
     print(f"facts:      {s['facts']} current")
     print(f"retrievals: {s['retrievals']}")
+    d = digestlib.latest(conn, max_age_hours=None)
+    print(f"digest:     {d['created_at'] if d else 'never built'}")
     print(f"newest:     {s['newest']}")
     print(f"last fetch: {s['last_fetch']}\n")
     print(f"{'feed':<28} {'last success':<21} {'fails':>5}  last error")
@@ -352,6 +437,8 @@ def build_parser() -> argparse.ArgumentParser:
     ps = sub.add_parser("search", help="show the chunks a question retrieves")
     retrieval_args(ps)
     ollama_args(ps)
+    ps.add_argument("--rerank", action="store_true", help="rerank candidates with the chat model (slow; see README)")
+    ps.add_argument("--model", default=default_model(), help="model used by --rerank")
     ps.set_defaults(func=cmd_search)
 
     pa = sub.add_parser("ask", help="answer a question from the stored news with a local model")
@@ -359,6 +446,14 @@ def build_parser() -> argparse.ArgumentParser:
     ollama_args(pa, chat=True)
     pa.add_argument("--num-ctx", type=int, default=DEFAULT_NUM_CTX, help=f"model context window (default {DEFAULT_NUM_CTX})")
     pa.add_argument("--no-facts", action="store_true", help="leave fact overrides out of the prompt")
+    pa.add_argument("--no-digest", action="store_true", help="leave today's headlines out of the prompt")
+    pa.add_argument("--route", choices=("auto", *[r for r in ROUTES if r != "none"]), default="auto",
+                    help="force a route instead of letting the router decide (default auto)")
+    pa.add_argument("--no-router", action="store_true", help="rules only: don't ask the router model")
+    pa.add_argument("--router-model", default=default_router_model(),
+                    help="router model (env ZANDS_ROUTER_MODEL, default qwen2.5:latest)")
+    pa.add_argument("--no-web", action="store_true", help="never use the SearXNG web fallback")
+    pa.add_argument("--save-web", action="store_true", help="store fetched web pages in the index")
     pa.add_argument("--show-prompt", action="store_true", help="print the full prompt before the answer")
     pa.set_defaults(func=cmd_ask)
 
@@ -387,6 +482,11 @@ def build_parser() -> argparse.ArgumentParser:
     pv.add_argument("-k", type=int, default=DEFAULT_K, help=f"chunks retrieved per question (default {DEFAULT_K})")
     pv.add_argument("--answers", action="store_true", help="also ask the model and check answer keywords (slow)")
     pv.add_argument("--list", dest="verbose_results", action="store_true", help="show per-question results")
+    pv.add_argument("--rerank", action="store_true", help="rerank hybrid/vector candidates with the chat model")
+    pv.add_argument("--routes", action="store_true", help="score the router on eval/routes.toml instead")
+    pv.add_argument("--routes-file", default="eval/routes.toml", help="router test set (default eval/routes.toml)")
+    pv.add_argument("--no-router", action="store_true", help="with --routes: rules only")
+    pv.add_argument("--router-model", default=default_router_model(), help="with --routes: router model")
     ollama_args(pv, chat=True)
     pv.set_defaults(func=cmd_eval)
 
@@ -406,6 +506,14 @@ def build_parser() -> argparse.ArgumentParser:
     su.set_defaults(func=cmd_schedule_uninstall)
     st = ssub.add_parser("status", help="is it loaded, last exit code, recent log lines")
     st.set_defaults(func=cmd_schedule_status)
+
+    pd = sub.add_parser("digest", help="show today's top stories (rebuilt after every ingest)")
+    pd.add_argument("--refresh", action="store_true", help="rebuild it now")
+    pd.add_argument("--hours", type=int, default=digestlib.DEFAULT_HOURS, help="look-back window (default 24)")
+    pd.set_defaults(func=cmd_digest)
+
+    pm = sub.add_parser("mcp", help="run the MCP server on stdio (search_news, latest_digest)")
+    pm.set_defaults(func=cmd_mcp)
 
     pst = sub.add_parser("stats", help="database counts and feed health")
     pst.set_defaults(func=cmd_stats)

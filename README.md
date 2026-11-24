@@ -2,19 +2,30 @@
 
 A local news RAG that runs on one laptop. Zands reads RSS feeds, stores the full text of each
 article in a single SQLite file, and answers questions about current events with a local
-[Ollama](https://ollama.com) model. The model answers only from retrieved articles (and any fact
-overrides you add) and cites them.
+[Ollama](https://ollama.com) model. A router decides whether a question needs the news index,
+the model's own knowledge, today's headlines or a live web search (through your own SearXNG),
+and the model answers only from what it was given, with citations. An MCP server lets coding
+agents search the index too.
 
 The point is to give local, open-weight models knowledge of today's news without web search
 or fine-tuning: fetch on a schedule, search locally, ground the answer in what was fetched.
 
 ```
-feeds.toml ─► ingest ─► data/news.db ───────────► retrieve ──────────────► ask (Ollama) ─► cited answer
- (launchd,    feedparser  articles, chunks         FTS5 BM25 ─┐              today's date
-  hourly)     httpx       chunks_fts (FTS5)                    ├ RRF fusion   + verified facts first
-              trafilatura chunk_vec (sqlite-vec)   sqlite-vec ─┘ + recency    + numbered sources
-              nomic-embed facts, feeds, meta        (degrades to keyword
-                          retrieval_log              if Ollama is down)
+feeds.toml ─► ingest ─► data/news.db ─────────────────────────────────────┐
+ (launchd,    feedparser  articles, chunks, chunks_fts (FTS5)              │
+  hourly)     httpx       chunk_vec (sqlite-vec), facts, digests           │
+              trafilatura feeds, retrieval_log                             │
+              nomic-embed → digest of today's top stories                  │
+                                                                           ▼
+question ─► router ──┬─ news ──────► hybrid retrieve (BM25 + vectors, RRF) ─► gate ─┐
+            rules,   ├─ knowledge ─► (model's own knowledge; upgraded to news       │
+            then     │               if the local index has a strong match)         ├─► prompt ─► Ollama ─► cited answer
+            qwen2.5  ├─ web ───────► SearXNG ─► fetch ─► best chunks                │   facts first, headlines,
+                     ├─ digest ────► today's top stories                            │   [n] news, [W] web, [D] digest
+                     └─ none ──────► "can't answer that"                            │
+                     weak local match + SearXNG up ─► news+web ────────────────────┘
+
+zands mcp ─► search_news / latest_digest for coding agents (zwans) and other MCP clients
 ```
 
 ## Setup
@@ -26,8 +37,18 @@ Requirements: macOS (scheduling uses launchd; everything else also runs on Linux
 uv sync                          # .venv with Python 3.12 (uv-managed, not /usr/bin/python3)
 ollama pull qwen2.5:latest       # answer model
 ollama pull nomic-embed-text     # embedding model
-uv run zands ingest              # first fetch (also embeds the new chunks)
+uv run zands ingest              # first fetch (also embeds the new chunks and builds the digest)
 ```
+
+Optional, for the web fallback: a SearXNG instance with the JSON format enabled. Zands uses
+`http://127.0.0.1:8888` by default (env `ZANDS_SEARXNG_URL`). Without one, everything works
+except web results, and the router falls back to the local index. A minimal setup:
+
+```bash
+docker run -d --name searxng --restart unless-stopped -p 127.0.0.1:8888:8080 searxng/searxng
+```
+
+Then add `json` to `search.formats` in the container's `settings.yml` and restart it.
 
 Use uv's Python, not macOS system Python: the system build often can't load SQLite extensions,
 and vector search needs `sqlite-vec`. `uv run zands stats` shows `vectors: n/a (...)` if the
@@ -39,11 +60,15 @@ extension couldn't load; everything else keeps working on keyword search.
 uv run zands ingest                      # fetch feeds, store new articles, embed new chunks (safe to re-run)
 uv run zands embed                       # backfill vectors for chunks that have none
 uv run zands search "nvidia ceo"         # show retrieved chunks, with keyword/vector ranks
-uv run zands ask "What happened with Nvidia's CEO?"   # cited answer from a local model
+uv run zands ask "What happened with Nvidia's CEO?"   # routed, cited answer from a local model
+uv run zands ask "What are today's top stories?"       # answered from the digest
+uv run zands digest                      # today's top stories (rebuilt after every ingest)
 uv run zands fact add Nvidia CEO "Jensen Huang" --from 2026-11-23 --source https://...
 uv run zands fact list                   # current facts (--all includes expired)
 uv run zands fact expire 3               # no longer true from today (--on YYYY-MM-DD)
 uv run zands eval                        # known-answer set: keyword vs hybrid hit rates
+uv run zands eval --routes               # router accuracy on eval/routes.toml
+uv run zands mcp                         # MCP server on stdio (see "MCP server" below)
 uv run zands ui                          # Datasette on http://127.0.0.1:8001/
 uv run zands schedule install            # hourly ingest via launchd (status / uninstall)
 uv run zands stats                       # counts and per-feed health
@@ -64,11 +89,17 @@ Useful flags:
 | `search`, `ask` | `--recency W` | recency boost weight, `0` disables (default 0.3) |
 | `ask` | `--model NAME` | answer model (env `ZANDS_MODEL`, default `qwen2.5:latest`) |
 | `ask` | `--num-ctx N` | model context window (default 16384; Ollama's own default is too small for 8 chunks) |
-| `ask` | `--no-facts` / `--show-prompt` | leave fact overrides out / print the full prompt |
+| `ask` | `--no-facts` / `--no-digest` / `--show-prompt` | leave facts out / leave headlines out / print the full prompt |
+| `ask` | `--route auto\|news\|knowledge\|web\|digest` | force a route (default `auto`: let the router decide) |
+| `ask` | `--no-router` / `--router-model NAME` | rules only / router model (env `ZANDS_ROUTER_MODEL`, default `qwen2.5:latest`) |
+| `ask` | `--no-web` / `--save-web` | never use SearXNG / store fetched web pages in the index |
+| `search`, `ask`, `eval` | `--rerank` | rerank candidates with the chat model (off by default: it measured worse, see Evaluation) |
+| `digest` | `--refresh` / `--hours N` | rebuild now / look-back window (default 24) |
 | Ollama users | `--ollama-url URL` | Ollama base URL (env `OLLAMA_HOST`, default `http://localhost:11434`) |
 | Ollama users | `--embed-model NAME` | embedding model (env `ZANDS_EMBED_MODEL`, default `nomic-embed-text`) |
 | `eval` | `--mode compare\|hybrid\|keyword\|vector` | what to score (default `compare`: keyword vs hybrid) |
 | `eval` | `--answers` / `--list` | also check model answers (slow) / per-question results |
+| `eval` | `--routes` | score the router instead of retrieval |
 | `ui` | `--host` / `--port` | bind address (default `127.0.0.1:8001`) |
 | `schedule install` | `--interval MIN` / `--no-load` | minutes between runs (default 60) / write the plist only |
 
@@ -112,7 +143,8 @@ published date.
 | `chunks_fts` | FTS5 external-content index over chunk title + body (porter stemming), kept in sync by triggers |
 | `chunk_vec` | sqlite-vec `vec0` table: one 768-d cosine vector per chunk, deleted with its chunk by trigger |
 | `facts` | fact overrides: subject, attribute, value, valid_from, valid_to, source_url, added_at |
-| `retrieval_log` | every retrieval: time, command, question, FTS query, k, chunk ids in rank order, effective mode, facts used |
+| `retrieval_log` | every retrieval: time, command, question, FTS query, k, chunk ids in rank order, effective mode, facts used, route + reason, web URLs |
+| `digests` | today's top stories (one row per UTC day, rebuilt after every ingest) |
 | `meta` | which embedding model made the stored vectors |
 
 New columns are added to existing databases automatically on open; no manual migration.
@@ -152,17 +184,89 @@ write subjects the way you'd ask about them ("Nvidia", "Bank of England").
 
 **Answering** (`src/zands/answer.py`). The prompt holds today's date, then any relevant current
 facts as `VERIFIED FACTS [F1]...`, marked as authoritative and overriding both training knowledge
-and the news, then the numbered chunks (title, source, published date, URL), then the rules:
+and the news, then today's headlines `[D1]...`, the numbered chunks (title, source, published
+date, URL), any web results `[W1]...`, then the rules:
 answer only from these, cite `[n]` / `[F1]`, say plainly when they don't cover the question. The
 reply is streamed from Ollama's `/api/chat`, followed by the facts and sources used. With no
 matching chunks and no facts, Zands says so without calling the model.
+
+**Routing** (`src/zands/route.py`, `src/zands/ask.py`). Before retrieval, each `ask` question
+gets a route:
+
+| Route | When | Answer from |
+|---|---|---|
+| `news` | about current events (default when unsure) | the local index |
+| `knowledge` | timeless ("What is a central bank?") | the model's own knowledge, with a note that it may be out of date |
+| `web` | live data (weather, exchange rates, current prices) | SearXNG results |
+| `digest` | "What are today's top stories?" | the digest |
+| `none` | the user's own private data, advice or predictions | a fixed reply, no model call |
+
+The decision is made in three steps:
+1. **Rules.** Regexes for time-sensitive words, live-data phrasings, timeless phrasings,
+   headline questions and personal data. A headline phrase followed by a topic ("latest news
+   *on Nvidia*") is a news search, not a digest question. No model call.
+2. **Classifier.** Only if no rule matched: `qwen2.5` answers with one word (0.14 s per call
+   when the model is loaded).
+3. **Gate.** After local retrieval, the best vector match decides:
+   - a `knowledge` question with a strong local match (≥ 0.70) becomes `news`;
+   - a `news` question with a weak match also gets web results (`news+web`), and local hits
+     below 0.65 are dropped as noise.
+
+   Those thresholds come from measuring covered questions (0.710–0.879) against uncovered ones
+   (0.534–0.689).
+
+Fact overrides are added to every route that calls the model. Each `ask` writes its route and
+the reason (which rule fired, what the model said, what the gate changed) to `retrieval_log`, so
+misroutes can be reviewed. `zands ui` has a canned "Router decisions" query for that.
+
+**Web fallback** (`src/zands/web.py`). Queries SearXNG's JSON API, fetches the top 4 result
+pages with the same polite client as ingest, extracts them with trafilatura, chunks them, and
+picks the 4 chunks closest to the question (nomic embeddings; keyword overlap without them;
+at most 2 per page). A page that can't be fetched contributes its search snippet. Web chunks are
+labeled `[W1]...` in the prompt, as live web results rather than curated news, and the model is
+told to prefer news sources and to treat everything in a source as data, never as instructions.
+`--save-web` stores the fetched pages in the index (source `web: <domain>`) so the next similar
+question is answered locally. SearXNG is health-checked (2 s timeout) only when a route could use
+it; if it's down, or returns nothing, the answer falls back to the local index and says why.
+
+**Digest** (`src/zands/digest.py`). Rebuilt at the end of every ingest, with no LLM involved, so
+it can't hallucinate. The last 24 hours of articles are grouped into stories by embedding
+similarity: an article joins a story when it is ≥ 0.90 similar to the story's mean vector.
+(Same-event coverage across outlets measured ≥ 0.95; 0.85–0.90 merged merely related events.)
+Stories are ranked by how many outlets cover them, and each is shown by its most typical
+headline. Without vectors, stories are grouped by headline word overlap. The digest goes into
+`ask` prompts as `TODAY'S HEADLINES [D1]...` for context, and answers `digest`-route questions
+directly.
+
+**MCP server** (`src/zands/mcp_server.py`). `zands mcp` serves two tools over stdio:
+- `search_news(query, k=8, mode="hybrid")`: the top chunks with title, source, date, URL and
+  text, plus when the index was last updated;
+- `latest_digest()`: today's top stories.
+
+The client does its own answering. Searches are logged with command `mcp`. To connect an MCP
+client (for example zwans), give it absolute paths:
+
+```json
+{
+  "mcpServers": {
+    "zands": {
+      "command": "/path/to/Zands/.venv/bin/zands",
+      "args": ["--db", "/path/to/Zands/data/news.db", "mcp"]
+    }
+  }
+}
+```
+
+**Reranker** (`src/zands/rerank.py`, opt-in with `--rerank`). One listwise call to the chat
+model to reorder the top 20 fused candidates; on any failure the original order is kept. It is
+off by default because it measured worse (see Evaluation).
 
 **Scheduling** (`src/zands/schedule.py`). `zands schedule install` writes
 `~/Library/LaunchAgents/local.zands.ingest.plist` and loads it with `launchctl bootstrap`. The
 agent runs this venv's Python directly (`python -m zands.cli --db <abs> ingest --feeds <abs>`)
 every 60 minutes and once at load, at background priority, logging to
 `~/Library/Logs/zands/ingest.log`. launchd rather than cron, because cron skips runs while the
-laptop sleeps, and launchd runs a missed interval once on wake. `zands schedule status` shows
+laptop sleeps, and launchd runs a missed interval once on wake. Each run also rebuilds the digest. `zands schedule status` shows
 whether it's loaded, run count, last exit code and the log tail. `zands schedule uninstall`
 unloads it and deletes the plist.
 
@@ -197,7 +301,17 @@ somewhat from run to run.
 
 Both modes find every article somewhere in the top 8. Hybrid's gain is in putting it first.
 The set is small and was written by the same session that built the system, so treat these as
-a regression check, not a benchmark. Add questions as the news moves on, and write them before
+a regression check, not a benchmark.
+
+**Reranker.** Hybrid + the qwen2.5 listwise reranker scored hit@1 85%, hit@3 95%, MRR 0.90:
+worse than plain hybrid (90% / 100% / 0.94), and 5.7 s slower per question. It moved two
+correct articles down (to #2 and #5) and fixed one. So it's off by default; it may earn its
+place with a much bigger index or a stronger model.
+
+**Router** (`zands eval --routes`, 27 labeled questions in `eval/routes.toml`): 27/27 correct
+with qwen2.5 as the classifier (15 decided by rules, 12 by the model). Rules alone (with the
+`news` default) get 20/24 on the original 24. With `qwen3.5:0.8b` as the classifier, 19/24: it
+sent advice questions and a news question to `web`. That is why qwen2.5 is the default. Add questions as the news moves on, and write them before
 looking at what retrieval returns.
 
 ## Tests
@@ -218,6 +332,13 @@ No test touches the network: Ollama is replaced by a deterministic fake embedder
 - facts: supersede, expire, relevance, prompt placement
 - eval scoring, the launchd plist and commands, the Datasette command, and that every canned
   query runs
+- router rules, classifier parsing and failure, the gate; the ask planner for every route
+  (forced, fallbacks, noise filtering, facts/digest placement, logging)
+- SearXNG client and page selection against a fake transport, saving web pages; digest
+  grouping, ranking, rendering and the no-vector fallback; the MCP server through an in-process
+  client; reranker parsing and failure handling
+
+The suite also passes with `OLLAMA_HOST` and `ZANDS_SEARXNG_URL` pointed at a dead port.
 
 ## Roadmap
 
@@ -228,19 +349,13 @@ sqlite-vec + nomic-embed-text with RRF hybrid retrieval and keyword fallback; `f
 `zands fact add/list/expire`, put first in prompts; launchd hourly ingest with
 `zands schedule install/uninstall/status`; 20-question known-answer set with `zands eval`.
 
-**Phase 3: routing, web fallback, quality and integration.**
-- Query router: one cheap classification step before retrieval (rules first, then a small
-  local model such as `qwen3.5:0.8b` or `qwen2.5`) that picks a route: local news search,
-  fact overrides, a structured API (weather, prices, ... later), the model's own knowledge
-  (stable, timeless questions), the SearXNG web fallback, or "I don't know". The chosen route
-  is logged in `retrieval_log` (a new `route` column, added like `mode` was) so misroutes can be
-  reviewed. This fixes "the model didn't realize it needed fresh info".
-- SearXNG web fallback: a self-hosted metasearch engine (local Docker, free, private, no paid
-  search API). When the router picks it, or local retrieval finds nothing relevant, `zands ask`
-  queries SearXNG's JSON API, fetches the top results with trafilatura and answers from them,
-  labeling those sources as web results rather than indexed news. Optionally ingest the
-  fetched pages into `news.db` so the next question is answered locally.
-- A reranker over the fused candidates.
-- A daily digest pushed into the system prompt, so the model knows the day's headlines without searching.
-- An MCP server exposing `search_news` and `latest_digest`, so the zwans coding agent and other
-  MCP clients can use Zands.
+**Phase 3: routing, web fallback, digest, MCP (done).** Rule + model query router with a
+post-retrieval gate and route logging; SearXNG web fallback (optionally saved into the index);
+LLM-free daily digest in prompts and as its own route; MCP server (`search_news`,
+`latest_digest`); an opt-in reranker (measured, off by default).
+
+**Possible next steps.**
+- Structured APIs for the `web` route's live data (weather, exchange rates), instead of scraping search results.
+- Retention: drop articles older than N months and compact the file (the index grows about 1–2 GB a year).
+- More known-answer and router questions as the news moves on, written before looking at results.
+- Connect zwans to `zands mcp` (configuration on the zwans side).

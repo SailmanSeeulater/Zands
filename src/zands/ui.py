@@ -18,17 +18,23 @@ METADATA = {
                 "chunks": {"description": "Retrieval units (≤800 words) with copied article metadata."},
                 "feeds": {"description": "Feed health: last success, last error, consecutive failures."},
                 "facts": {"description": "Fact overrides put first in `zands ask` prompts while current."},
-                "retrieval_log": {"description": "Every search/ask/eval retrieval, newest last.", "sort_desc": "id"},
+                "retrieval_log": {"description": "Every search/ask/eval/mcp retrieval with mode, route and why.", "sort_desc": "id"},
+                "digests": {"description": "Today's top stories, rebuilt after every ingest (one row per day).", "sort_desc": "day"},
             },
             "queries": {
                 "recent_retrievals": {
                     "title": "Recent retrievals with their top hit",
                     "sql": (
-                        "SELECT r.id, r.created_at, r.command, r.mode, r.question, r.query, "
+                        "SELECT r.id, r.created_at, r.command, r.route, r.mode, r.question, r.route_reason, "
                         "json_array_length(r.chunk_ids) AS hits, c.title AS top_title, c.source AS top_source "
                         "FROM retrieval_log r LEFT JOIN chunks c ON c.id = json_extract(r.chunk_ids, '$[0]') "
                         "ORDER BY r.id DESC LIMIT 100"
                     ),
+                },
+                "routes": {
+                    "title": "Router decisions (review misroutes here)",
+                    "sql": "SELECT created_at, route, route_reason, question, json_array_length(chunk_ids) AS hits, "
+                    "web_urls FROM retrieval_log WHERE command = 'ask' ORDER BY id DESC LIMIT 200",
                 },
                 "empty_retrievals": {
                     "title": "Questions that retrieved nothing",
