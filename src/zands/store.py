@@ -1,15 +1,20 @@
-"""SQLite storage: one file holds articles, chunks, feed health, the FTS index and the retrieval log."""
+"""SQLite storage: one file holds articles, chunks, feed health, the FTS index, chunk vectors
+(sqlite-vec), fact overrides and the retrieval log."""
 
 from __future__ import annotations
 
 import json
+import logging
 import sqlite3
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
-SCHEMA_VERSION = 1
+log = logging.getLogger(__name__)
+
+SCHEMA_VERSION = 2
+EMBED_DIM = 768  # nomic-embed-text
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS feeds (
@@ -72,13 +77,50 @@ END;
 CREATE TABLE IF NOT EXISTS retrieval_log (
     id         INTEGER PRIMARY KEY,
     created_at TEXT NOT NULL,
-    command    TEXT,                             -- 'search' / 'ask' / caller name
+    command    TEXT,                             -- 'search' / 'ask' / 'eval' / caller name
     question   TEXT NOT NULL,
     query      TEXT,                             -- the FTS5 query actually run (NULL if none)
     k          INTEGER NOT NULL,
-    chunk_ids  TEXT NOT NULL                     -- JSON array, in rank order
+    chunk_ids  TEXT NOT NULL,                    -- JSON array, in rank order
+    mode       TEXT,                             -- 'keyword' / 'hybrid' / 'vector' / 'keyword (fallback)'
+    fact_ids   TEXT                              -- JSON array of facts put in the prompt (ask only)
+);
+
+-- Dated corrections that override the model's stale knowledge (and the news, if they conflict).
+CREATE TABLE IF NOT EXISTS facts (
+    id         INTEGER PRIMARY KEY,
+    subject    TEXT NOT NULL,
+    attribute  TEXT NOT NULL,
+    value      TEXT NOT NULL,
+    valid_from TEXT NOT NULL,                    -- YYYY-MM-DD
+    valid_to   TEXT,                             -- YYYY-MM-DD, exclusive; NULL while current
+    source_url TEXT,
+    added_at   TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS facts_subject ON facts(subject COLLATE NOCASE, attribute COLLATE NOCASE);
+
+CREATE TABLE IF NOT EXISTS meta (
+    key   TEXT PRIMARY KEY,
+    value TEXT NOT NULL
 );
 """
+
+# Created only when the sqlite-vec extension loads. Cosine distance on nomic vectors.
+VEC_SCHEMA = f"""
+CREATE VIRTUAL TABLE IF NOT EXISTS chunk_vec USING vec0(
+    chunk_id INTEGER PRIMARY KEY,
+    embedding float[{EMBED_DIM}] distance_metric=cosine
+);
+CREATE TRIGGER IF NOT EXISTS chunks_ad_vec AFTER DELETE ON chunks BEGIN
+    DELETE FROM chunk_vec WHERE chunk_id = old.id;
+END;
+"""
+
+# Columns added after a table first shipped: (table, column, type).
+MIGRATIONS = [
+    ("retrieval_log", "mode", "TEXT"),
+    ("retrieval_log", "fact_ids", "TEXT"),
+]
 
 # Query parameters that only track clicks; dropping them keeps one URL per article.
 TRACKING_PARAMS = {
@@ -121,19 +163,84 @@ def normalize_url(url: str) -> str:
     return urlunsplit((scheme, netloc, path, urlencode(query), ""))
 
 
-def connect(path: str | Path) -> sqlite3.Connection:
-    """Open (creating if needed) the database and make sure the schema exists."""
+# ---------------------------------------------------------------- connection
+
+
+class Connection(sqlite3.Connection):
+    """sqlite3 connection that remembers whether sqlite-vec is available."""
+
+    vec_enabled: bool = False
+    vec_error: str | None = None
+
+
+def load_vec(conn: sqlite3.Connection) -> None:
+    """Load the sqlite-vec extension into conn (raises if it can't)."""
+    import sqlite_vec
+
+    conn.enable_load_extension(True)
+    try:
+        sqlite_vec.load(conn)
+    finally:
+        conn.enable_load_extension(False)
+
+
+def vec_extension_path() -> str | None:
+    try:
+        import sqlite_vec
+
+        return sqlite_vec.loadable_path()
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def connect(path: str | Path, vector: bool = True) -> Connection:
+    """Open (creating if needed) the database and make sure the schema exists.
+
+    With vector=True (default) the sqlite-vec extension is loaded and the
+    chunk_vec table created. If the extension can't load (e.g. a Python whose
+    sqlite3 has extension loading compiled out), the connection still works
+    and `conn.vec_enabled` is False, so callers fall back to keyword search.
+    """
     if str(path) != ":memory:":
         Path(path).parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(path))
+    conn = sqlite3.connect(str(path), factory=Connection)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     conn.execute("PRAGMA journal_mode = WAL")
     conn.execute("PRAGMA busy_timeout = 5000")
     conn.executescript(SCHEMA)
+    _migrate(conn)
+    if vector:
+        try:
+            load_vec(conn)
+            conn.executescript(VEC_SCHEMA)
+            conn.vec_enabled = True
+        except Exception as exc:  # noqa: BLE001
+            conn.vec_error = f"{type(exc).__name__}: {exc}"
+            log.debug("sqlite-vec unavailable: %s", conn.vec_error)
     conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
     conn.commit()
     return conn
+
+
+def _migrate(conn: sqlite3.Connection) -> None:
+    for table, column, ctype in MIGRATIONS:
+        cols = {r[1] for r in conn.execute(f"PRAGMA table_info({table})")}
+        if column not in cols:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {ctype}")
+
+
+def get_meta(conn: sqlite3.Connection, key: str) -> str | None:
+    row = conn.execute("SELECT value FROM meta WHERE key = ?", (key,)).fetchone()
+    return row[0] if row else None
+
+
+def set_meta(conn: sqlite3.Connection, key: str, value: str) -> None:
+    conn.execute(
+        "INSERT INTO meta(key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        (key, value),
+    )
+    conn.commit()
 
 
 # ---------------------------------------------------------------- feeds
@@ -218,6 +325,34 @@ def insert_article(conn: sqlite3.Connection, article: Article, chunks: list[str]
     return article_id
 
 
+# ---------------------------------------------------------------- vectors
+
+
+def chunks_missing_vectors(conn: Connection, limit: int | None = None) -> list[sqlite3.Row]:
+    sql = """SELECT c.id, c.title, c.body FROM chunks c
+             WHERE NOT EXISTS (SELECT 1 FROM chunk_vec v WHERE v.chunk_id = c.id)
+             ORDER BY c.id"""
+    if limit:
+        sql += f" LIMIT {int(limit)}"
+    return conn.execute(sql).fetchall()
+
+
+def put_vectors(conn: Connection, items: list[tuple[int, list[float]]]) -> None:
+    from sqlite_vec import serialize_float32
+
+    with conn:
+        conn.executemany(
+            "INSERT INTO chunk_vec(chunk_id, embedding) VALUES (?, ?)",
+            [(cid, serialize_float32(vec)) for cid, vec in items],
+        )
+
+
+def vector_count(conn: sqlite3.Connection) -> int | None:
+    if not getattr(conn, "vec_enabled", False):
+        return None
+    return conn.execute("SELECT COUNT(*) FROM chunk_vec").fetchone()[0]
+
+
 # ---------------------------------------------------------------- retrieval log
 
 
@@ -228,11 +363,23 @@ def log_retrieval(
     chunk_ids: list[int],
     k: int,
     command: str | None = None,
-) -> None:
-    conn.execute(
-        "INSERT INTO retrieval_log(created_at, command, question, query, k, chunk_ids) VALUES (?, ?, ?, ?, ?, ?)",
-        (utcnow(), command, question, query, k, json.dumps(chunk_ids)),
+    mode: str | None = None,
+    fact_ids: list[int] | None = None,
+) -> int:
+    cur = conn.execute(
+        """INSERT INTO retrieval_log(created_at, command, question, query, k, chunk_ids, mode, fact_ids)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+        (
+            utcnow(), command, question, query, k, json.dumps(chunk_ids), mode,
+            json.dumps(fact_ids) if fact_ids is not None else None,
+        ),
     )
+    conn.commit()
+    return cur.lastrowid
+
+
+def set_log_facts(conn: sqlite3.Connection, log_id: int, fact_ids: list[int]) -> None:
+    conn.execute("UPDATE retrieval_log SET fact_ids = ? WHERE id = ?", (json.dumps(fact_ids), log_id))
     conn.commit()
 
 
@@ -241,6 +388,8 @@ def stats(conn: sqlite3.Connection) -> dict:
     return {
         "articles": one("SELECT COUNT(*) FROM articles"),
         "chunks": one("SELECT COUNT(*) FROM chunks"),
+        "vectors": vector_count(conn),
+        "facts": one("SELECT COUNT(*) FROM facts WHERE valid_to IS NULL"),
         "retrievals": one("SELECT COUNT(*) FROM retrieval_log"),
         "newest": one("SELECT MAX(published_at) FROM articles"),
         "last_fetch": one("SELECT MAX(fetched_at) FROM articles"),
