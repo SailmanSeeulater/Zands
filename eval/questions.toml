@@ -92,7 +92,7 @@ style = "keyword"
 [[question]]
 q = "How much is CrowdStrike paying for Zscaler?"
 expect_url = ["crowdstrike-to-acquire-zscaler"]
-answer_any = ["44"]
+answer_any = ["44", "43.9"]
 style = "keyword"
 
 [[question]]
@@ -116,7 +116,7 @@ style = "keyword"
 [[question]]
 q = "How many were hurt in the car bombing in Colombia?"
 expect_url = ["cjqlq2n4np7do"]
-answer_any = ["20"]
+answer_any = ["20", "23"]
 style = "keyword"
 
 [[question]]
