@@ -141,7 +141,18 @@ browser. Works today as `uvx datasette data/news.db`; later, wrap it as a `zands
 - A 20-question known-answer test set, built before tuning anything, to measure whether a
   retrieval change actually helps.
 
-**Phase 3: quality and integration.**
+**Phase 3: routing, web fallback, quality and integration.**
+- Query router: one cheap classification step before retrieval (rules first, then a small
+  local model such as `qwen3.5:0.8b` or `qwen2.5`) that picks a route: local news search,
+  fact overrides, a structured API (weather, prices, ... later), the model's own knowledge
+  (stable, timeless questions), the SearXNG web fallback, or "I don't know". The chosen route
+  is logged in `retrieval_log` (a new `route` column) so misroutes can be reviewed. This fixes
+  "the model didn't realize it needed fresh info".
+- SearXNG web fallback: a self-hosted metasearch engine (local Docker, free, private, no paid
+  search API). When the router picks it, or local retrieval finds nothing relevant, `zands ask`
+  queries SearXNG's JSON API, fetches the top results with trafilatura and answers from them,
+  labeling those sources as web results rather than indexed news. Optionally ingest the
+  fetched pages into `news.db` so the next question is answered locally.
 - A reranker over the fused candidates.
 - A daily digest pushed into the system prompt, so the model knows the day's headlines without searching.
 - An MCP server exposing `search_news` and `latest_digest`, so the zwans coding agent and other
