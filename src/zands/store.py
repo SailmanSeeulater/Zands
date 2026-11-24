@@ -13,7 +13,7 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 log = logging.getLogger(__name__)
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 EMBED_DIM = 768  # nomic-embed-text
 
 SCHEMA = """
@@ -83,7 +83,19 @@ CREATE TABLE IF NOT EXISTS retrieval_log (
     k          INTEGER NOT NULL,
     chunk_ids  TEXT NOT NULL,                    -- JSON array, in rank order
     mode       TEXT,                             -- 'keyword' / 'hybrid' / 'vector' / 'keyword (fallback)'
-    fact_ids   TEXT                              -- JSON array of facts put in the prompt (ask only)
+    fact_ids   TEXT,                             -- JSON array of facts put in the prompt (ask only)
+    route        TEXT,                           -- ask only: 'news' / 'knowledge' / 'web' / 'none'
+    route_reason TEXT,                           -- why: which rule fired, classifier output, gate decision
+    web_urls     TEXT                            -- JSON array of web result URLs put in the prompt
+);
+
+-- Today's top stories, rebuilt after every ingest (one row per UTC day, latest build wins).
+CREATE TABLE IF NOT EXISTS digests (
+    day        TEXT PRIMARY KEY,                 -- YYYY-MM-DD (UTC)
+    created_at TEXT NOT NULL,
+    hours      INTEGER NOT NULL,                 -- look-back window
+    text       TEXT NOT NULL,                    -- rendered digest, as put in prompts
+    items      TEXT NOT NULL                     -- JSON: [{title, sources, article_ids, newest}]
 );
 
 -- Dated corrections that override the model's stale knowledge (and the news, if they conflict).
@@ -120,6 +132,9 @@ END;
 MIGRATIONS = [
     ("retrieval_log", "mode", "TEXT"),
     ("retrieval_log", "fact_ids", "TEXT"),
+    ("retrieval_log", "route", "TEXT"),
+    ("retrieval_log", "route_reason", "TEXT"),
+    ("retrieval_log", "web_urls", "TEXT"),
 ]
 
 # Query parameters that only track clicks; dropping them keeps one URL per article.
@@ -380,6 +395,26 @@ def log_retrieval(
 
 def set_log_facts(conn: sqlite3.Connection, log_id: int, fact_ids: list[int]) -> None:
     conn.execute("UPDATE retrieval_log SET fact_ids = ? WHERE id = ?", (json.dumps(fact_ids), log_id))
+    conn.commit()
+
+
+def set_log_route(
+    conn: sqlite3.Connection,
+    log_id: int,
+    route: str,
+    reason: str | None,
+    fact_ids: list[int] | None = None,
+    web_urls: list[str] | None = None,
+) -> None:
+    conn.execute(
+        "UPDATE retrieval_log SET route = ?, route_reason = ?, fact_ids = ?, web_urls = ? WHERE id = ?",
+        (
+            route, reason,
+            json.dumps(fact_ids) if fact_ids is not None else None,
+            json.dumps(web_urls) if web_urls is not None else None,
+            log_id,
+        ),
+    )
     conn.commit()
 
 
