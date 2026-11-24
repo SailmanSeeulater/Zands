@@ -116,3 +116,26 @@ def test_store_reports_after_ingest(conn):
     ingest.run_ingest(conn, FEEDS, client=client())
     s = store.stats(conn)
     assert s["articles"] == 2 and len(s["feeds"]) == 4
+
+
+def test_ingest_embeds_new_chunks(conn):
+    from fakes import FakeEmbedder
+
+    report = ingest.run_ingest(conn, FEEDS, client=client(), embedder=FakeEmbedder())
+    chunks = conn.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
+    assert report.embedded == chunks and store.vector_count(conn) == chunks
+    assert report.embed_error is None
+    again = ingest.run_ingest(conn, FEEDS, client=client(), embedder=FakeEmbedder())
+    assert again.embedded == 0
+
+
+def test_ingest_survives_ollama_down(conn):
+    from fakes import DownEmbedder, FakeEmbedder
+
+    report = ingest.run_ingest(conn, FEEDS, client=client(), embedder=DownEmbedder())
+    assert report.new == 2 and report.embedded == 0
+    assert "can't reach Ollama" in report.embed_error
+    assert store.vector_count(conn) == 0
+    # the next run (Ollama back) backfills the vectors it missed
+    later = ingest.run_ingest(conn, FEEDS, client=client(), embedder=FakeEmbedder())
+    assert later.new == 0 and later.embedded == conn.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]

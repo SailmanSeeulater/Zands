@@ -1,22 +1,35 @@
-"""Keyword search over chunks: natural-language question -> safe FTS5 query -> BM25 (+ mild recency)."""
+"""Retrieval over chunks.
+
+- keyword: natural-language question -> safe FTS5 query -> BM25
+- vector:  nomic-embed-text query embedding -> sqlite-vec cosine KNN
+- hybrid:  both candidate lists fused with Reciprocal Rank Fusion (default)
+
+All modes apply a mild recency boost and a per-article cap. Hybrid and vector
+mode degrade to keyword search (never crash) when Ollama or sqlite-vec is
+unavailable or nothing has been embedded yet; the reason is in `Retrieval.note`
+and the effective mode is logged.
+"""
 
 from __future__ import annotations
 
 import math
 import re
 import sqlite3
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
 from . import store
 
 DEFAULT_K = 8
+MODES = ("hybrid", "keyword", "vector")
+DEFAULT_MODE = "hybrid"
 TITLE_WEIGHT = 3.0  # bm25 column weights: title matches count more than body matches
 BODY_WEIGHT = 1.0
 RECENCY_WEIGHT = 0.3  # at most +30% score for a brand-new chunk...
 RECENCY_HALF_LIFE_DAYS = 3.0  # ...halving every 3 days
 MAX_PER_ARTICLE = 2  # keep overlapping chunks of one article from filling the top k
-CANDIDATES_PER_K = 6
+CANDIDATES = 50  # per retriever, before fusion
+RRF_K = 60  # standard RRF constant: score = sum(1 / (RRF_K + rank))
 
 # Common English function words plus words that are about the question rather
 # than the news ("latest", "today") and would only add noise to keyword search.
@@ -80,8 +93,21 @@ class Hit:
     published_at: str | None
     body: str
     snippet: str
-    bm25: float  # raw FTS5 bm25 (lower is better)
-    score: float  # final score after recency (higher is better)
+    score: float  # final score (higher is better)
+    bm25: float | None = None  # raw FTS5 bm25 (lower is better) if keyword-matched
+    keyword_rank: int | None = None  # 1-based rank among keyword candidates
+    vector_rank: int | None = None  # 1-based rank among vector candidates
+    distance: float | None = None  # cosine distance if vector-matched
+
+
+@dataclass
+class Retrieval:
+    hits: list[Hit]
+    mode: str  # effective mode: 'hybrid' | 'keyword' | 'vector' | 'keyword (fallback)'
+    query: str | None  # FTS5 query (None if the question had no searchable words)
+    note: str | None = None  # why hybrid/vector fell back, if it did
+    log_id: int | None = None
+    candidates: dict = field(default_factory=dict)  # retriever -> candidate count
 
 
 def _age_days(timestamp: str | None, now: datetime) -> float | None:
@@ -100,57 +126,181 @@ def recency_factor(age_days: float | None, weight: float = RECENCY_WEIGHT, half_
     return 1.0 + weight * math.pow(0.5, age_days / half_life)
 
 
-def search(
+# ---------------------------------------------------------------- retrievers
+
+_CHUNK_COLUMNS = """c.id, c.article_id, c.title, c.source, c.url, c.published_at, c.body,
+                    COALESCE(c.published_at, a.fetched_at) AS ts"""
+
+
+def keyword_candidates(conn: sqlite3.Connection, query: str, n: int = CANDIDATES) -> list[sqlite3.Row]:
+    """Chunks matching the FTS5 query, best BM25 first."""
+    return conn.execute(
+        f"""
+        SELECT {_CHUNK_COLUMNS},
+               snippet(chunks_fts, 1, '[', ']', ' … ', 24) AS snip,
+               bm25(chunks_fts, {TITLE_WEIGHT}, {BODY_WEIGHT}) AS rank
+        FROM chunks_fts
+        JOIN chunks c ON c.id = chunks_fts.rowid
+        JOIN articles a ON a.id = c.article_id
+        WHERE chunks_fts MATCH ?
+        ORDER BY rank
+        LIMIT ?
+        """,
+        (query, n),
+    ).fetchall()
+
+
+def vector_candidates(conn: sqlite3.Connection, query_vec: list[float], n: int = CANDIDATES) -> list[sqlite3.Row]:
+    """Nearest chunks by cosine distance, closest first."""
+    from sqlite_vec import serialize_float32
+
+    return conn.execute(
+        f"""
+        WITH knn AS (
+            SELECT chunk_id, distance FROM chunk_vec
+            WHERE embedding MATCH ? AND k = ?
+        )
+        SELECT {_CHUNK_COLUMNS}, knn.distance
+        FROM knn
+        JOIN chunks c ON c.id = knn.chunk_id
+        JOIN articles a ON a.id = c.article_id
+        ORDER BY knn.distance
+        """,
+        (serialize_float32(query_vec), n),
+    ).fetchall()
+
+
+def _lead(body: str, words: int = 40) -> str:
+    parts = body.split()
+    return " ".join(parts[:words]) + (" …" if len(parts) > words else "")
+
+
+def _hit_from_row(r: sqlite3.Row) -> Hit:
+    return Hit(
+        chunk_id=r["id"], article_id=r["article_id"], title=r["title"], source=r["source"], url=r["url"],
+        published_at=r["published_at"], body=r["body"], snippet=_lead(r["body"]), score=0.0,
+    )
+
+
+def fuse(
+    keyword_rows: list[sqlite3.Row],
+    vector_rows: list[sqlite3.Row],
+    now: datetime,
+    recency_weight: float = RECENCY_WEIGHT,
+    rrf_k: int = RRF_K,
+) -> list[Hit]:
+    """Reciprocal Rank Fusion of the two candidate lists.
+
+    The recency boost is applied *inside* each list first (BM25 × recency,
+    cosine similarity × recency) and the lists are re-ranked by that before
+    fusing. Multiplying the fused RRF score instead would let recency swamp
+    relevance: adjacent RRF ranks differ by under 2%, against up to +30% from
+    recency. With only one list non-empty the score is that list's boosted
+    score, so keyword-only results match phase 1.
+    """
+    def boost(r) -> float:
+        return recency_factor(_age_days(r["ts"], now), weight=recency_weight)
+
+    kw = sorted(keyword_rows, key=lambda r: -r["rank"] * boost(r), reverse=True)  # bm25 < 0; flip
+    vec = sorted(vector_rows, key=lambda r: (1.0 - r["distance"]) * boost(r), reverse=True)
+
+    hits: dict[int, Hit] = {}
+    rrf: dict[int, float] = {}
+    for rank, r in enumerate(kw, 1):
+        h = hits.setdefault(r["id"], _hit_from_row(r))
+        h.snippet, h.bm25, h.keyword_rank = r["snip"], r["rank"], rank
+        rrf[r["id"]] = rrf.get(r["id"], 0.0) + 1.0 / (rrf_k + rank)
+        if not vec:
+            h.score = -r["rank"] * boost(r)
+    for rank, r in enumerate(vec, 1):
+        h = hits.setdefault(r["id"], _hit_from_row(r))
+        h.distance, h.vector_rank = r["distance"], rank
+        rrf[r["id"]] = rrf.get(r["id"], 0.0) + 1.0 / (rrf_k + rank)
+        if not kw:
+            h.score = (1.0 - r["distance"]) * boost(r)
+    if kw and vec:
+        for cid, h in hits.items():
+            h.score = rrf[cid]
+    return sorted(hits.values(), key=lambda h: h.score, reverse=True)
+
+
+def cap_per_article(hits: list[Hit], k: int, max_per_article: int = MAX_PER_ARTICLE) -> list[Hit]:
+    out: list[Hit] = []
+    per_article: dict[int, int] = {}
+    for h in hits:
+        if max_per_article and per_article.get(h.article_id, 0) >= max_per_article:
+            continue
+        per_article[h.article_id] = per_article.get(h.article_id, 0) + 1
+        out.append(h)
+        if len(out) >= k:
+            break
+    return out
+
+
+# ---------------------------------------------------------------- entry points
+
+
+def retrieve(
     conn: sqlite3.Connection,
     question: str,
     k: int = DEFAULT_K,
+    mode: str = DEFAULT_MODE,
+    embedder=None,
     recency_weight: float = RECENCY_WEIGHT,
     max_per_article: int = MAX_PER_ARTICLE,
+    candidates: int = CANDIDATES,
     now: datetime | None = None,
     log: bool = True,
     command: str | None = None,
-) -> list[Hit]:
-    """Top-k chunks for a question. Every call is written to retrieval_log
-    (unless log=False), including calls that found nothing."""
+) -> Retrieval:
+    """Top-k chunks for a question.
+
+    Every call is written to retrieval_log (unless log=False), including calls
+    that found nothing, with the effective mode.
+    """
+    from .embed import EmbedError, embed_query
+
+    if mode not in MODES:
+        raise ValueError(f"mode must be one of {MODES}, not {mode!r}")
     now = now or datetime.now(timezone.utc)
     query = build_fts_query(question)
-    hits: list[Hit] = []
-    if query:
-        rows = conn.execute(
-            f"""
-            SELECT c.id, c.article_id, c.title, c.source, c.url, c.published_at, c.body,
-                   COALESCE(c.published_at, a.fetched_at) AS ts,
-                   snippet(chunks_fts, 1, '[', ']', ' … ', 24) AS snip,
-                   bm25(chunks_fts, {TITLE_WEIGHT}, {BODY_WEIGHT}) AS rank
-            FROM chunks_fts
-            JOIN chunks c ON c.id = chunks_fts.rowid
-            JOIN articles a ON a.id = c.article_id
-            WHERE chunks_fts MATCH ?
-            ORDER BY rank
-            LIMIT ?
-            """,
-            (query, max(k, 1) * CANDIDATES_PER_K),
-        ).fetchall()
-        scored = []
-        for r in rows:
-            relevance = -r["rank"]  # bm25 is negative; flip so higher = better
-            score = relevance * recency_factor(_age_days(r["ts"], now), weight=recency_weight)
-            scored.append(
-                Hit(
-                    chunk_id=r["id"], article_id=r["article_id"], title=r["title"], source=r["source"],
-                    url=r["url"], published_at=r["published_at"], body=r["body"], snippet=r["snip"],
-                    bm25=r["rank"], score=score,
-                )
-            )
-        scored.sort(key=lambda h: h.score, reverse=True)
-        per_article: dict[int, int] = {}
-        for h in scored:
-            if max_per_article and per_article.get(h.article_id, 0) >= max_per_article:
-                continue
-            per_article[h.article_id] = per_article.get(h.article_id, 0) + 1
-            hits.append(h)
-            if len(hits) >= k:
-                break
+    note = None
+    effective = mode
+
+    vector_rows: list[sqlite3.Row] = []
+    if mode in ("hybrid", "vector"):
+        if embedder is None:
+            note = "no embedder configured"
+        elif not getattr(conn, "vec_enabled", False):
+            note = f"sqlite-vec unavailable ({getattr(conn, 'vec_error', None)})"
+        elif not store.vector_count(conn):
+            note = "no chunks embedded yet (run `zands embed`)"
+        else:
+            try:
+                vector_rows = vector_candidates(conn, embed_query(embedder, question), candidates)
+            except EmbedError as exc:
+                note = f"query embedding failed: {exc}"
+        if note:
+            effective = "keyword (fallback)"
+
+    keyword_rows: list[sqlite3.Row] = []
+    if query and effective != "vector":
+        keyword_rows = keyword_candidates(conn, query, candidates)
+
+    hits = cap_per_article(fuse(keyword_rows, vector_rows, now, recency_weight), k, max_per_article)
+    result = Retrieval(
+        hits=hits, mode=effective, query=query, note=note,
+        candidates={"keyword": len(keyword_rows), "vector": len(vector_rows)},
+    )
     if log:
-        store.log_retrieval(conn, question, query, [h.chunk_id for h in hits], k, command=command)
-    return hits
+        result.log_id = store.log_retrieval(
+            conn, question, query, [h.chunk_id for h in hits], k, command=command, mode=effective
+        )
+    return result
+
+
+def search(conn: sqlite3.Connection, question: str, k: int = DEFAULT_K, **kwargs) -> list[Hit]:
+    """retrieve(...).hits; defaults to keyword mode when no embedder is passed."""
+    if "embedder" not in kwargs and "mode" not in kwargs:
+        kwargs["mode"] = "keyword"
+    return retrieve(conn, question, k=k, **kwargs).hits

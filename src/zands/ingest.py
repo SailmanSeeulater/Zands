@@ -32,6 +32,7 @@ import trafilatura  # noqa: E402
 
 from . import store
 from .chunk import chunk_text
+from .embed import Embedder, EmbedError, embed_pending
 
 log = logging.getLogger(__name__)
 
@@ -63,6 +64,8 @@ class FeedResult:
 class IngestReport:
     feeds: list[FeedResult] = field(default_factory=list)
     seconds: float = 0.0
+    embedded: int = 0
+    embed_error: str | None = None  # set when embedding was skipped or failed (keyword search still works)
 
     @property
     def new(self) -> int:
@@ -256,9 +259,15 @@ def run_ingest(
     client: httpx.Client | None = None,
     concurrency: int = 4,
     limit: int | None = None,
+    embedder: Embedder | None = None,
 ) -> IngestReport:
-    """Ingest every feed in turn. Article pages within a feed are fetched with
-    `concurrency` workers; database writes stay on this thread."""
+    """Ingest every feed in turn, then embed any chunks without a vector.
+
+    Article pages within a feed are fetched with `concurrency` workers;
+    database writes stay on this thread. Embedding failures (Ollama down,
+    sqlite-vec missing) are reported but never fail the ingest: the articles
+    are stored and searchable by keyword, and the next run backfills vectors.
+    """
     start = time.monotonic()
     report = IngestReport()
     own_client = client is None
@@ -276,5 +285,15 @@ def run_ingest(
     finally:
         if own_client:
             client.close()
+    if embedder is not None:
+        if not getattr(conn, "vec_enabled", False):
+            report.embed_error = f"sqlite-vec unavailable: {getattr(conn, 'vec_error', None)}"
+        else:
+            try:
+                report.embedded = embed_pending(conn, embedder, progress=True)
+            except EmbedError as exc:
+                report.embed_error = str(exc)
+        if report.embed_error:
+            log.warning("embedding skipped: %s (keyword search still works; next run retries)", report.embed_error)
     report.seconds = time.monotonic() - start
     return report
