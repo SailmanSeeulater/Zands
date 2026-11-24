@@ -121,7 +121,17 @@ fallback, re-run idempotency) and the prompt builder. No test touches the networ
 
 **Phase 1: keyword RAG (done).** Feeds → SQLite + FTS5 → BM25 search → cited answers via Ollama.
 
-**Phase 2: hybrid search and scheduling.**
+**Next up: browsable database.** [Datasette](https://datasette.io) as a web UI over
+`data/news.db`: browse articles, chunks, feed health and `retrieval_log`, and run SQL in the
+browser. Works today as `uvx datasette data/news.db`; later, wrap it as a `zands ui` command.
+
+**Phase 2: hybrid search, fact overrides and scheduling.**
+- Fact overrides: a small `facts` table (`subject`, `attribute`, `value`, `valid_from`,
+  `valid_to` (NULL while still current), `source_url`, `added_at`) managed with
+  `zands fact add/list/expire`. `zands ask` puts the relevant current facts at the top of the
+  prompt as authoritative, dated corrections that win over the model's stale training knowledge.
+  It's a new table, so `store.connect()`'s `CREATE TABLE IF NOT EXISTS` adds it to existing
+  databases without a migration.
 - `sqlite-vec` in the same database file, with `nomic-embed-text` embeddings from Ollama.
   nomic needs task prefixes: `search_document: ` when embedding chunks, `search_query: ` when
   embedding questions.
