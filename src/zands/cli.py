@@ -239,7 +239,7 @@ def cmd_fact_expire(args: argparse.Namespace) -> int:
 
 
 def cmd_eval(args: argparse.Namespace) -> int:
-    from .evaluate import load_questions, run_mode
+    from .evaluate import load_questions, record_mode_report, run_mode
 
     if args.routes:
         return _eval_routes(args)
@@ -280,14 +280,17 @@ def cmd_eval(args: argparse.Namespace) -> int:
     for rep in reports:
         if rep.answer_rate is not None:
             print(f"\nanswer check ({rep.mode}): {rep.answer_rate:.0%} of answers contain an expected keyword")
+    for rep in reports:  # kept for the dashboard's eval history
+        record_mode_report(conn, rep, len(questions), rerank=bool(args.rerank and rep.mode != "keyword"))
     return 0
 
 
 def _eval_routes(args: argparse.Namespace) -> int:
-    from .evaluate import load_routes, run_routes
+    from .evaluate import load_routes, record_route_report, run_routes
 
     cases = load_routes(args.routes_file)
     rep = run_routes(cases, use_model=not args.no_router, model=args.router_model, base_url=args.ollama_url)
+    record_route_report(store.connect(args.db), rep, use_model=not args.no_router)
     for r in rep.results:
         mark = "ok " if r.ok else "BAD"
         print(f"  {mark} expect {r.case.expect:<9} got {r.got.route:<9} [{r.got.method}] {r.case.q}")
@@ -333,6 +336,26 @@ def cmd_ui(args: argparse.Namespace) -> int:
         return subprocess.run(cmd).returncode
     except KeyboardInterrupt:
         return 0
+
+
+def cmd_dashboard(args: argparse.Namespace) -> int:
+    from .dashboard import make_server
+
+    store.connect(args.db).close()  # creates/migrates the schema; the server itself only reads
+    try:
+        server = make_server(args.db, host=args.host, port=args.port)
+    except OSError as exc:
+        print(f"error: can't listen on {args.host}:{args.port}: {exc}", file=sys.stderr)
+        return 2
+    host, port = server.server_address[:2]
+    print(f"Zands dashboard on http://{host}:{port}/ (read-only over {args.db}; Ctrl-C to stop)")
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        server.server_close()
+    return 0
 
 
 def cmd_schedule_install(args: argparse.Namespace) -> int:
@@ -489,6 +512,11 @@ def build_parser() -> argparse.ArgumentParser:
     pv.add_argument("--router-model", default=default_router_model(), help="with --routes: router model")
     ollama_args(pv, chat=True)
     pv.set_defaults(func=cmd_eval)
+
+    pdb = sub.add_parser("dashboard", help="charts over the database in the browser (read-only)")
+    pdb.add_argument("--host", default="127.0.0.1")
+    pdb.add_argument("--port", type=int, default=8002)
+    pdb.set_defaults(func=cmd_dashboard)
 
     pu = sub.add_parser("ui", help="browse the database in Datasette")
     pu.add_argument("--host", default="127.0.0.1")

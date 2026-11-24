@@ -300,9 +300,25 @@ def retrieve(
     )
     if log:
         result.log_id = store.log_retrieval(
-            conn, question, query, [h.chunk_id for h in hits], k, command=command, mode=effective
+            conn, question, query, [h.chunk_id for h in hits], k, command=command, mode=effective,
+            hit_sources=hit_sources(hits, k),
         )
     return result
+
+
+def hit_sources(hits: list[Hit], k: int) -> dict[str, int]:
+    """Which retriever would have found each hit on its own, i.e. ranked it in its own top k.
+
+    Hybrid search pulls 50 candidates from each side, so nearly every hit is *somewhere* in
+    both lists; "top k" is the useful question. `fusion` counts hits neither retriever had in
+    its top k, lifted by RRF and the recency boost.
+    """
+    out = {"keyword": 0, "vector": 0, "both": 0, "fusion": 0}
+    for h in hits:
+        kw = h.keyword_rank is not None and h.keyword_rank <= k
+        vec = h.vector_rank is not None and h.vector_rank <= k
+        out["both" if kw and vec else "keyword" if kw else "vector" if vec else "fusion"] += 1
+    return out
 
 
 def search(conn: sqlite3.Connection, question: str, k: int = DEFAULT_K, **kwargs) -> list[Hit]:

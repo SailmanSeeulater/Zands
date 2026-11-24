@@ -139,3 +139,14 @@ def test_ingest_survives_ollama_down(conn):
     # the next run (Ollama back) backfills the vectors it missed
     later = ingest.run_ingest(conn, FEEDS, client=client(), embedder=FakeEmbedder())
     assert later.new == 0 and later.embedded == conn.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
+
+
+def test_each_run_is_recorded(conn):
+    ingest.run_ingest(conn, FEEDS, client=client())
+    ingest.run_ingest(conn, FEEDS, client=client())
+    runs = conn.execute("SELECT * FROM ingest_runs ORDER BY id").fetchall()
+    assert [(r["new_articles"], r["feeds_ok"], r["feeds_failed"]) for r in runs] == [(2, 1, 3), (0, 1, 3)]
+    assert runs[0]["embedded"] is None and runs[0]["started_at"] <= runs[0]["finished_at"]
+    per_feed = {r["feed"]: r for r in conn.execute("SELECT * FROM ingest_feed_runs WHERE run_id = ?", (runs[0]["id"],))}
+    assert per_feed["Good"]["ok"] == 1 and per_feed["Good"]["new_items"] == 2
+    assert per_feed["Broken"]["ok"] == 0 and "500" in per_feed["Broken"]["error"]

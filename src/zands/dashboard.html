@@ -1,0 +1,461 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Zands dashboard</title>
+<style>
+:root {
+  color-scheme: light;
+  --page: #f9f9f7; --surface: #fcfcfb; --ink: #0b0b0b; --ink-2: #52514e; --muted: #898781;
+  --grid: #e1e0d9; --axis: #c3c2b7; --ring: rgba(11,11,11,0.10); --wash: rgba(11,11,11,0.04);
+  --s1: #2a78d6; --s2: #eb6834; --s3: #1baf7a; --s4: #eda100; --s5: #e87ba4; --s6: #008300; --s7: #6250d6; --s8: #e34948;
+  --other: #b5b3ad;
+  --good: #0ca30c; --warning: #fab219; --critical: #d03b3b;
+  --seq-lo: #eef4fc; --seq-hi: #104281;
+}
+@media (prefers-color-scheme: dark) {
+  :root:where(:not([data-theme="light"])) {
+    color-scheme: dark;
+    --page: #0d0d0d; --surface: #1a1a19; --ink: #f0efec; --ink-2: #c3c2b7; --muted: #898781;
+    --grid: #2c2c2a; --axis: #383835; --ring: rgba(255,255,255,0.10); --wash: rgba(255,255,255,0.05);
+    --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500; --s5: #d55181; --s6: #0ca30c; --s7: #9085e9; --s8: #e66767;
+    --other: #5f5e5a;
+    --seq-lo: #1f2630; --seq-hi: #86b6ef;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --page: #0d0d0d; --surface: #1a1a19; --ink: #f0efec; --ink-2: #c3c2b7; --muted: #898781;
+  --grid: #2c2c2a; --axis: #383835; --ring: rgba(255,255,255,0.10); --wash: rgba(255,255,255,0.05);
+  --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500; --s5: #d55181; --s6: #0ca30c; --s7: #9085e9; --s8: #e66767;
+  --other: #5f5e5a;
+  --seq-lo: #1f2630; --seq-hi: #86b6ef;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--page); color: var(--ink); font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+header { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; padding: 20px 24px 8px; max-width: 1280px; margin: 0 auto; }
+header h1 { font-size: 20px; margin: 0; font-weight: 650; }
+header .meta { color: var(--ink-2); font-size: 13px; }
+header button { margin-left: auto; font: inherit; font-size: 13px; color: var(--ink-2); background: var(--surface); border: 1px solid var(--ring); border-radius: 8px; padding: 4px 10px; cursor: pointer; }
+main { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; padding: 8px 24px 32px; max-width: 1280px; margin: 0 auto; transition: opacity .2s; }
+main.loading { opacity: .6; }
+.card { background: var(--surface); border: 1px solid var(--ring); border-radius: 12px; padding: 16px 18px; min-width: 0; }
+.card.wide { grid-column: 1 / -1; }
+.card h2 { font-size: 15px; margin: 0 0 2px; font-weight: 600; }
+.card .sub { color: var(--ink-2); font-size: 12.5px; margin: 0 0 12px; }
+.card h3 { font-size: 13px; font-weight: 600; margin: 16px 0 6px; color: var(--ink-2); }
+@media (max-width: 820px) { main { grid-template-columns: minmax(0, 1fr); padding: 8px 16px 24px; } header { padding: 16px 16px 8px; } }
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(132px, 1fr)); gap: 12px; }
+.tiles.compact { grid-template-columns: repeat(auto-fit, minmax(72px, 1fr)); gap: 8px; }
+.tile { border: 1px solid var(--ring); border-radius: 10px; padding: 10px 12px; }
+.tile .label { color: var(--ink-2); font-size: 12.5px; }
+.tile .value { font-size: 24px; font-weight: 600; margin-top: 2px; }
+.tile .note { color: var(--muted); font-size: 12px; }
+.meter { height: 6px; background: var(--grid); border-radius: 3px; margin-top: 6px; overflow: hidden; }
+.meter > i { display: block; height: 100%; background: var(--s1); border-radius: 3px; }
+.legend { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 12.5px; color: var(--ink-2); margin-bottom: 8px; }
+.legend span { display: inline-flex; align-items: center; gap: 6px; }
+.legend i { width: 10px; height: 10px; border-radius: 3px; display: inline-block; }
+svg { display: block; width: 100%; overflow: visible; }
+svg text { fill: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+.hit { fill: transparent; cursor: default; }
+.hit:hover { fill: var(--wash); }
+.hbars { display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; }
+.hbar .row { display: flex; justify-content: space-between; gap: 12px; font-size: 13px; }
+.hbar .row b { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.hbar .row span { color: var(--ink-2); font-variant-numeric: tabular-nums; flex: none; }
+.hbar .track { height: 8px; margin-top: 3px; }
+.hbar .track i { display: block; height: 100%; min-width: 2px; border-radius: 0 4px 4px 0; }
+.status { display: inline-flex; align-items: center; gap: 5px; font-size: 12.5px; white-space: nowrap; }
+.status svg { width: 14px; height: 14px; display: inline; }
+table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+th { text-align: left; color: var(--ink-2); font-weight: 500; border-bottom: 1px solid var(--axis); padding: 4px 6px; }
+td { border-bottom: 1px solid var(--grid); padding: 5px 6px; vertical-align: top; }
+td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+.scroll { overflow-x: auto; }
+details { margin-top: 10px; }
+details summary { color: var(--ink-2); font-size: 12.5px; cursor: pointer; }
+details .scroll { margin-top: 6px; max-height: 320px; overflow: auto; }
+.empty { border: 1px dashed var(--axis); border-radius: 10px; padding: 14px; color: var(--ink-2); font-size: 13px; }
+.empty b { color: var(--ink); font-weight: 600; }
+.heat { display: grid; gap: 2px; font-size: 12px; align-items: center; }
+.heat .term { color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding-right: 8px; }
+.heat .day { color: var(--muted); text-align: center; font-size: 11px; }
+.heat .cell { height: 22px; border-radius: 3px; display: flex; align-items: center; justify-content: center; font-size: 11px; font-variant-numeric: tabular-nums; }
+.scale { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 11.5px; margin-top: 8px; }
+.scale i { width: 120px; height: 8px; border-radius: 4px; background: linear-gradient(90deg, var(--seq-lo), var(--seq-hi)); }
+.split { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 8px 24px; }
+.seg { display: flex; gap: 2px; height: 14px; margin: 6px 0; }
+.seg i { display: block; height: 100%; }
+.seg i:first-child { border-radius: 4px 0 0 4px; } .seg i:last-child { border-radius: 0 4px 4px 0; }
+ul.plain { list-style: none; padding: 0; margin: 0; }
+ul.plain li { padding: 4px 0; border-bottom: 1px solid var(--grid); font-size: 13px; }
+ul.plain li small { color: var(--muted); }
+#tip { position: fixed; pointer-events: none; z-index: 10; background: var(--surface); color: var(--ink); border: 1px solid var(--ring);
+       box-shadow: 0 4px 16px rgba(0,0,0,.12); border-radius: 8px; padding: 8px 10px; font-size: 12.5px; max-width: 320px; display: none; }
+#tip .k { color: var(--ink-2); } #tip i { width: 9px; height: 9px; border-radius: 2px; display: inline-block; margin-right: 6px; }
+#tip table td { border: 0; padding: 1px 4px; }
+.error { color: var(--critical); }
+</style>
+</head>
+<body>
+<header>
+  <h1>Zands</h1>
+  <span class="meta" id="meta">Loading…</span>
+  <button id="theme" type="button" title="Switch theme">Theme: auto</button>
+</header>
+<main id="main"></main>
+<div id="tip" role="tooltip"></div>
+<script>
+"use strict";
+const SLOTS = ["--s1", "--s2", "--s3", "--s4", "--s5", "--s6", "--s7", "--s8"];
+const color = (i) => `var(${SLOTS[i % SLOTS.length]})`;
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const fmt = (n) => (n == null ? "–" : Number(n).toLocaleString());
+const pct = (x, d = 0) => (x == null ? "–" : `${(x * 100).toFixed(d)}%`);
+const bytes = (b) => (b == null ? "–" : b > 1e9 ? `${(b / 1e9).toFixed(2)} GB` : `${(b / 1e6).toFixed(1)} MB`);
+const when = (ts) => (ts ? new Date(ts).toLocaleString([], { dateStyle: "medium", timeStyle: "short" }) : "–");
+const day = (d) => new Date(`${d}T12:00:00Z`).toLocaleDateString([], { month: "short", day: "numeric" });
+const hour = (ts) => new Date(ts).toLocaleTimeString([], { hour: "numeric" });
+function ago(ts) {
+  if (!ts) return "never";
+  const m = (Date.now() - new Date(ts).getTime()) / 60000;
+  if (m < 1) return "just now";
+  if (m < 60) return `${Math.round(m)} min ago`;
+  if (m < 48 * 60) return `${Math.round(m / 60)} h ago`;
+  return `${Math.round(m / 1440)} days ago`;
+}
+const el = (html) => { const t = document.createElement("template"); t.innerHTML = html.trim(); return t.content.firstElementChild; };
+
+// ---------------------------------------------------------------- theme (auto → light → dark)
+const THEMES = ["auto", "light", "dark"];
+function applyTheme(t) {
+  if (t === "auto") document.documentElement.removeAttribute("data-theme");
+  else document.documentElement.setAttribute("data-theme", t);
+  document.getElementById("theme").textContent = `Theme: ${t}`;
+}
+let theme = "auto";
+try { theme = localStorage.getItem("zands-theme") || "auto"; } catch (e) { /* storage blocked */ }
+applyTheme(theme);
+document.getElementById("theme").addEventListener("click", () => {
+  theme = THEMES[(THEMES.indexOf(theme) + 1) % THEMES.length];
+  applyTheme(theme);
+  try { localStorage.setItem("zands-theme", theme); } catch (e) { /* storage blocked */ }
+});
+
+// ---------------------------------------------------------------- tooltip
+const tip = document.getElementById("tip");
+document.addEventListener("mouseover", (e) => {
+  const t = e.target.closest("[data-tip]");
+  if (!t) { tip.style.display = "none"; return; }
+  tip.innerHTML = t.getAttribute("data-tip");
+  tip.style.display = "block";
+});
+document.addEventListener("mousemove", (e) => {
+  if (tip.style.display !== "block") return;
+  const r = tip.getBoundingClientRect();
+  const x = Math.min(e.clientX + 14, window.innerWidth - r.width - 8);
+  const y = e.clientY + 14 + r.height > window.innerHeight ? e.clientY - r.height - 10 : e.clientY + 14;
+  tip.style.left = `${Math.max(8, x)}px`; tip.style.top = `${y}px`;
+});
+document.addEventListener("mouseleave", () => { tip.style.display = "none"; });
+
+// ---------------------------------------------------------------- building blocks
+function card(title, sub, wide) {
+  const c = el(`<section class="card${wide ? " wide" : ""}"><h2>${esc(title)}</h2>${sub ? `<p class="sub">${sub}</p>` : ""}</section>`);
+  document.getElementById("main").appendChild(c);
+  return c;
+}
+function legend(items) {
+  return `<div class="legend">${items.map((it) => `<span><i style="background:${it.color}"></i>${esc(it.name)}</span>`).join("")}</div>`;
+}
+function tableView(head, rows, label = "Show table") {
+  const th = head.map((h) => `<th class="${h.num ? "num" : ""}">${esc(h.label ?? h)}</th>`).join("");
+  const tr = rows.map((r) => `<tr>${r.map((v, i) => `<td class="${head[i].num ? "num" : ""}">${v}</td>`).join("")}</tr>`).join("");
+  return `<details><summary>${label}</summary><div class="scroll"><table><thead><tr>${th}</tr></thead><tbody>${tr}</tbody></table></div></details>`;
+}
+function empty(since, what) {
+  return `<div class="empty"><b>Collecting since ${since ? esc(when(since)) : "now"}.</b> ${what}</div>`;
+}
+function niceMax(v) {
+  if (v <= 0) return 1;
+  const p = 10 ** Math.floor(Math.log10(v)); const n = v / p;
+  return (n <= 1 ? 1 : n <= 2 ? 2 : n <= 5 ? 5 : 10) * p;
+}
+
+// Charts measure their container, so they're drawn after every card is in place (see render()).
+const drawQueue = [];
+const bars = (container, opts) => drawQueue.push(() => drawBars(container, opts));
+const lines = (container, opts) => drawQueue.push(() => drawLines(container, opts));
+
+// Vertical bars, optionally stacked. labels: x categories; series: [{name, values, color}]
+function drawBars(container, { labels, series, xfmt, height = 180, unit = "" }) {
+  const W = Math.max(container.clientWidth, 280), padL = 34, padB = 22, padT = 6;
+  const totals = labels.map((_, i) => series.reduce((s, se) => s + (se.values[i] || 0), 0));
+  const max = niceMax(Math.max(...totals, 1));
+  const ph = height - padB - padT, pw = W - padL;
+  const step = pw / Math.max(labels.length, 1), bw = Math.max(2, Math.min(36, step - 2));
+  const y = (v) => padT + ph - (v / max) * ph;
+  let g = "";
+  for (const t of [0, max / 2, max]) {
+    g += `<line x1="${padL}" x2="${W}" y1="${y(t)}" y2="${y(t)}" stroke="var(${t === 0 ? "--axis" : "--grid"})" stroke-width="1"/>`;
+    g += `<text x="${padL - 6}" y="${y(t) + 4}" text-anchor="end">${fmt(Math.round(t))}</text>`;
+  }
+  const every = Math.ceil(labels.length / Math.max(1, Math.floor(pw / 56)));
+  labels.forEach((lab, i) => {
+    const x = padL + i * step + (step - bw) / 2;
+    let acc = 0;
+    const segs = series.filter((s) => s.values[i] > 0);
+    segs.forEach((s, j) => {
+      const v = s.values[i], top = y(acc + v), bottom = y(acc);
+      const h = Math.max(0, bottom - top - (j > 0 ? 2 : 0)); // 2px surface gap between stacked segments
+      const r = j === segs.length - 1 ? Math.min(4, h / 2, bw / 2) : 0;
+      g += r ? `<path d="M${x},${top + h} V${top + r} q0,-${r} ${r},-${r} H${x + bw - r} q${r},0 ${r},${r} V${top + h} Z" fill="${s.color}"/>`
+             : `<rect x="${x}" y="${top}" width="${bw}" height="${h}" fill="${s.color}"/>`;
+      acc += v;
+    });
+    if (i % every === 0) g += `<text x="${x + bw / 2}" y="${height - 6}" text-anchor="middle">${esc(xfmt ? xfmt(lab) : lab)}</text>`;
+    const rows = series.filter((s) => s.values[i] > 0).map((s) => `<tr><td><i style="background:${s.color}"></i>${esc(s.name)}</td><td class="num">${fmt(s.values[i])}</td></tr>`).join("");
+    const tipHtml = `<b>${esc(xfmt ? xfmt(lab, true) : lab)}</b> · ${fmt(totals[i])}${unit}${series.length > 1 && rows ? `<table>${rows}</table>` : ""}`;
+    g += `<rect class="hit" x="${padL + i * step}" y="${padT}" width="${step}" height="${ph}" data-tip="${esc(tipHtml)}"/>`;
+  });
+  container.insertAdjacentHTML("beforeend", `<svg viewBox="0 0 ${W} ${height}" height="${height}" role="img">${g}</svg>`);
+}
+
+// Lines over runs, y in [0, 1]. series: [{name, color, points: [{x, y, tip}]}], xs: shared x labels
+function drawLines(container, { xs, series, height = 160, yfmt = (v) => v.toFixed(2) }) {
+  const W = Math.max(container.clientWidth, 260), padL = 36, padB = 22, padT = 8, padR = 10;
+  const ph = height - padB - padT, pw = W - padL - padR;
+  const x = (i) => padL + (xs.length === 1 ? pw / 2 : (i / (xs.length - 1)) * pw);
+  const y = (v) => padT + ph - v * ph;
+  let g = "";
+  for (const t of [0, 0.5, 1]) {
+    g += `<line x1="${padL}" x2="${W - padR}" y1="${y(t)}" y2="${y(t)}" stroke="var(${t === 0 ? "--axis" : "--grid"})"/>`;
+    g += `<text x="${padL - 6}" y="${y(t) + 4}" text-anchor="end">${yfmt(t)}</text>`;
+  }
+  const every = Math.ceil(xs.length / Math.max(1, Math.floor(pw / 70)));
+  xs.forEach((lab, i) => { if (i % every === 0) g += `<text x="${x(i)}" y="${height - 6}" text-anchor="middle">${esc(lab)}</text>`; });
+  for (const s of series.slice().reverse()) { // first series drawn last, so it stays visible where points coincide
+    const pts = s.points.filter((p) => p.y != null);
+    if (pts.length > 1) g += `<polyline fill="none" stroke="${s.color}" stroke-width="2" stroke-linejoin="round" points="${pts.map((p) => `${x(p.x)},${y(p.y)}`).join(" ")}"/>`;
+    for (const p of pts) {
+      g += `<circle cx="${x(p.x)}" cy="${y(p.y)}" r="4.5" fill="${s.color}" stroke="var(--surface)" stroke-width="2"/>`;
+      g += `<circle class="hit" cx="${x(p.x)}" cy="${y(p.y)}" r="12" data-tip="${esc(p.tip)}"/>`;
+    }
+  }
+  container.insertAdjacentHTML("beforeend", `<svg viewBox="0 0 ${W} ${height}" height="${height}" role="img">${g}</svg>`);
+}
+
+function hbars(rows, colorVar = "var(--s1)") {
+  const max = Math.max(...rows.map((r) => r.value), 1);
+  return `<div class="hbars">${rows.map((r) => `<div class="hbar" data-tip="${esc(r.tip || `${r.label}: ${fmt(r.value)}`)}">
+    <div class="row"><b title="${esc(r.label)}">${esc(r.label)}</b><span>${esc(r.valueLabel ?? fmt(r.value))}</span></div>
+    <div class="track"><i style="width:${(r.value / max) * 100}%;background:${r.color || colorVar}"></i></div></div>`).join("")}</div>`;
+}
+
+const STATUS = {
+  ok: { label: "OK", color: "var(--good)", path: "M3.5 8.5l3 3 6-7" },
+  stale: { label: "Stale", color: "var(--warning)", path: "M8 4v5M8 11.5v.5" },
+  failing: { label: "Failing", color: "var(--critical)", path: "M4.5 4.5l7 7M11.5 4.5l-7 7" },
+  never: { label: "No success yet", color: "var(--muted)", path: "M4 8h8" },
+};
+function status(s) {
+  const st = STATUS[s] || STATUS.never;
+  return `<span class="status"><svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="7.5" fill="${st.color}" opacity=".18"/><path d="${st.path}" stroke="${st.color}" stroke-width="2" fill="none" stroke-linecap="round"/></svg>${st.label}</span>`;
+}
+
+// ---------------------------------------------------------------- panels
+function renderCoverage(d) {
+  const c = card("Coverage and size", "What's in news.db right now.", true);
+  const tiles = [
+    { label: "Articles", value: fmt(d.articles), note: `newest ${ago(d.newest_article)}` },
+    { label: "Chunks", value: fmt(d.chunks), note: `last fetch ${ago(d.last_fetch)}` },
+    { label: "Vectors", value: d.vectors == null ? "–" : fmt(d.vectors),
+      note: d.vectors == null ? "sqlite-vec unavailable" : `${pct(d.vector_coverage)} of chunks embedded`, meter: d.vector_coverage },
+    { label: "Database size", value: bytes(d.db_bytes), note: "news.db + write-ahead log" },
+    { label: "Fact overrides", value: fmt(d.facts_current), note: `current · ${fmt(d.facts_expired)} expired` },
+    { label: "Questions logged", value: fmt(d.retrievals), note: "search, ask and MCP (not eval)" },
+  ];
+  c.insertAdjacentHTML("beforeend", `<div class="tiles">${tiles.map((t) => `<div class="tile"><div class="label">${t.label}</div>
+    <div class="value">${t.value}</div>${t.meter != null ? `<div class="meter"><i style="width:${t.meter * 100}%"></i></div>` : ""}
+    <div class="note">${esc(t.note)}</div></div>`).join("")}</div>`);
+}
+
+function renderIngested(d) {
+  const hourly = d.bucket === "hour";
+  const c = card("Articles stored over time", hourly ? "New articles per hour and feed, last 48 hours (by fetch time)." : "New articles per day and feed, last 30 days (by fetch time).", true);
+  if (!d.buckets.length) { c.insertAdjacentHTML("beforeend", `<div class="empty">No articles yet. Run <code>zands ingest</code>.</div>`); return; }
+  const series = d.series.map((s, i) => ({ ...s, color: s.name === "Other" ? "var(--other)" : color(i) }));
+  c.insertAdjacentHTML("beforeend", legend(series));
+  const xfmt = (b, long) => (hourly ? (long ? when(b) : hour(b)) : day(b));
+  const box = el(`<div></div>`); c.appendChild(box);
+  bars(box, { labels: d.buckets, series, xfmt, height: 200, unit: " articles" });
+  c.insertAdjacentHTML("beforeend", tableView(
+    [hourly ? "Hour" : "Day", ...series.map((s) => ({ label: s.name, num: true })), { label: "Total", num: true }],
+    d.buckets.map((b, i) => [esc(xfmt(b, true)), ...series.map((s) => fmt(s.values[i])), fmt(series.reduce((t, s) => t + s.values[i], 0))])));
+}
+
+function renderFeeds(d) {
+  const c = card("Feed health", "Status from the last ingest; a feed is stale after three missed hourly runs.");
+  if (!d.feeds.length) { c.insertAdjacentHTML("beforeend", `<div class="empty">No feeds yet.</div>`); }
+  else {
+    c.insertAdjacentHTML("beforeend", `<div class="scroll"><table><thead><tr><th>Feed</th><th>Status</th><th>Last success</th>
+      <th class="num">Last run</th><th class="num">Articles</th></tr></thead><tbody>${d.feeds.map((f) => `<tr>
+      <td>${esc(f.name)}${f.last_error && f.failure_count ? `<br><small class="error">${esc(f.last_error.slice(0, 120))}</small>` : ""}</td>
+      <td>${status(f.status)}${f.failure_count ? ` <small>×${f.failure_count}</small>` : ""}</td>
+      <td title="${esc(when(f.last_success_at))}">${ago(f.last_success_at)}</td>
+      <td class="num">${f.last_new_items == null ? "–" : `+${fmt(f.last_new_items)}`}</td><td class="num">${fmt(f.articles)}</td></tr>`).join("")}</tbody></table></div>`);
+  }
+  c.insertAdjacentHTML("beforeend", `<h3>New articles per ingest run</h3>`);
+  if (!d.runs.length) {
+    c.insertAdjacentHTML("beforeend", empty(d.collecting_since, "Each <code>zands ingest</code> run (including the hourly launchd job) adds a bar here."));
+    return;
+  }
+  const box = el(`<div></div>`); c.appendChild(box);
+  const tipFor = (r) => `${r.feeds_failed ? `${r.feeds_failed} feed(s) failed · ` : ""}${r.embedded == null ? "no embedding" : `${fmt(r.embedded)} chunks embedded`} · ${r.seconds.toFixed(0)} s`;
+  bars(box, { labels: d.runs.map((r) => r.started_at), series: [{ name: "New articles", color: "var(--s1)", values: d.runs.map((r) => r.new_articles) }],
+    xfmt: (b, long) => (long ? when(b) : hour(b)), height: 140, unit: " new articles" });
+  c.insertAdjacentHTML("beforeend", tableView([{ label: "Started" }, { label: "New", num: true }, { label: "Feeds failed", num: true }, { label: "Embedded", num: true }, { label: "Seconds", num: true }],
+    d.runs.slice().reverse().map((r) => [esc(when(r.started_at)), fmt(r.new_articles), fmt(r.feeds_failed), r.embedded == null ? "–" : fmt(r.embedded), r.seconds.toFixed(1)])));
+  const failed = d.runs.filter((r) => r.feeds_failed).length;
+  if (failed) c.insertAdjacentHTML("beforeend", `<p class="sub" style="margin-top:6px">${status("failing")} ${failed} of the last ${d.runs.length} runs had a failing feed (${tipFor(d.runs.filter((r) => r.feeds_failed).pop())}).</p>`);
+}
+
+function renderDigest(d) {
+  const c = card("Today's digest", d.day ? `Top stories for ${day(d.day)}, ranked by how many outlets covered each (last ${d.hours} h; rebuilt ${ago(d.created_at)}).` : "");
+  if (!d.stories.length) { c.insertAdjacentHTML("beforeend", `<div class="empty">No digest yet. It's built after every ingest.</div>`); return; }
+  const top = d.stories.slice(0, 10);
+  c.insertAdjacentHTML("beforeend", hbars(top.map((s) => ({ label: s.title, value: s.outlets, valueLabel: `${s.outlets} outlet${s.outlets === 1 ? "" : "s"}`,
+    tip: `<b>${esc(s.title)}</b><br><span class="k">${s.articles} articles from</span> ${esc(s.sources.join(", "))}` }))));
+  c.insertAdjacentHTML("beforeend", tableView([{ label: "#" }, { label: "Story" }, { label: "Outlets", num: true }, { label: "Articles", num: true }, { label: "Sources" }],
+    d.stories.map((s, i) => [i + 1, esc(s.title), s.outlets, s.articles, esc(s.sources.join(", "))]), `Show all ${d.stories.length} stories`));
+}
+
+function renderTopics(d) {
+  const c = card("Headline topics", `The most frequent headline words over the last ${d.days.length || 7} days, counted once per headline. A cheap stand-in for entity extraction.`, true);
+  if (!d.terms.length) { c.insertAdjacentHTML("beforeend", `<div class="empty">Not enough headlines yet.</div>`); return; }
+  const max = Math.max(...d.terms.flatMap((t) => t.values), 1);
+  let g = `<div class="heat" style="grid-template-columns: minmax(80px, 160px) repeat(${d.days.length}, minmax(28px, 1fr)) 48px"><div></div>`;
+  g += d.days.map((x) => `<div class="day">${esc(day(x))}</div>`).join("") + `<div class="day">total</div>`;
+  for (const t of d.terms) {
+    g += `<div class="term" title="${esc(t.term)}">${esc(t.term)}</div>`;
+    t.values.forEach((v, i) => {
+      const p = v ? 15 + (v / max) * 85 : 0;
+      const ink = p > 55 ? "var(--surface)" : "var(--ink-2)";
+      g += `<div class="cell" style="background:${v ? `color-mix(in oklab, var(--seq-hi) ${p}%, var(--seq-lo))` : "var(--wash)"};color:${ink}"
+        data-tip="${esc(`<b>${esc(t.term)}</b> · ${esc(day(d.days[i]))}<br>${v} headline${v === 1 ? "" : "s"}`)}">${v || ""}</div>`;
+    });
+    g += `<div class="day" style="text-align:right;color:var(--ink-2)">${fmt(t.total)}</div>`;
+  }
+  c.insertAdjacentHTML("beforeend", `<div class="scroll">${g}</div></div><div class="scale">0<i></i>${fmt(max)} headlines a day</div>`);
+  c.insertAdjacentHTML("beforeend", tableView([{ label: "Word" }, ...d.days.map((x) => ({ label: day(x), num: true })), { label: "Total", num: true }],
+    d.terms.map((t) => [esc(t.term), ...t.values.map(fmt), fmt(t.total)])));
+}
+
+const COMMANDS = ["ask", "search", "mcp"];
+function renderRetrievals(d) {
+  const c = card("Questions and retrieval", "From the retrieval log: search, ask and MCP calls. Eval runs are left out so they don't swamp the rest.", true);
+  if (!d.total) { c.insertAdjacentHTML("beforeend", `<div class="empty">No questions yet. Try <code>zands ask</code>.</div>`); return; }
+  const series = d.by_command.map((s) => ({ ...s, color: color(COMMANDS.includes(s.name) ? COMMANDS.indexOf(s.name) : 3 + d.by_command.indexOf(s)) }));
+  const grid = el(`<div class="split"></div>`); c.appendChild(grid);
+  const single = d.days.length === 1;
+  const perDay = el(`<div><h3>Questions ${single ? `on ${esc(day(d.days[0]))}` : "per day"}</h3>${single ? "" : legend(series)}</div>`); grid.appendChild(perDay);
+  if (single) {
+    perDay.insertAdjacentHTML("beforeend", `<div class="tiles compact">${series.map((s) => `<div class="tile"><div class="label">${esc(s.name)}</div><div class="value">${fmt(s.values[0])}</div></div>`).join("")}</div><p class="sub" style="margin-top:8px">A per-day chart appears once there's a second day.</p>`);
+  } else {
+    const box = el(`<div></div>`); perDay.appendChild(box);
+    bars(box, { labels: d.days, series, xfmt: (x) => day(x), height: 160, unit: " questions" });
+  }
+  grid.insertAdjacentHTML("beforeend", `<div><h3>Router decisions (ask)</h3>${d.routes.length ? hbars(d.routes.map((r) => ({ label: r.route, value: r.n }))) : `<div class="empty">No routed questions yet.</div>`}</div>`);
+  grid.insertAdjacentHTML("beforeend", `<div><h3>Retrieval mode</h3>${hbars(d.modes.map((m) => ({ label: m.mode === "unknown" ? "not recorded (before phase 2)" : m.mode, value: m.n })))}</div>`);
+
+  const src = el(`<div><h3>Where the hits came from</h3><p class="sub">Which retriever ranked each hit in its own top k; "neither" hits were lifted by fusion and recency.</p></div>`); grid.appendChild(src);
+  if (!d.hit_sources) {
+    src.insertAdjacentHTML("beforeend", empty(d.collecting_since, "Each new search records which retriever had each hit in its own top k (keyword, vector, both, or neither), plus web pages used."));
+  } else {
+    const parts = [["keyword", "Keyword only"], ["vector", "Vector only"], ["both", "Both"], ["fusion", "Neither (fusion)"], ["web", "Web pages"]]
+      .map(([k, name], i) => ({ name, value: d.hit_sources[k] || 0, color: color(i) }));
+    const total = parts.reduce((s, p) => s + p.value, 0) || 1;
+    src.insertAdjacentHTML("beforeend", `${legend(parts)}<div class="seg">${parts.filter((p) => p.value).map((p) => `<i style="width:${(p.value / total) * 100}%;background:${p.color}" data-tip="${esc(`${p.name}: ${fmt(p.value)} (${pct(p.value / total)})`)}"></i>`).join("")}</div>
+      <p class="sub">${parts.map((p) => `${p.name.toLowerCase()} ${pct(p.value / total)}`).join(" · ")} over ${fmt(d.hit_sources_logged)} questions since ${esc(when(d.collecting_since))}.</p>`);
+  }
+  const miss = el(`<div><h3>Questions that found nothing</h3></div>`); grid.appendChild(miss);
+  miss.insertAdjacentHTML("beforeend", d.empty
+    ? `<p class="sub">${fmt(d.empty)} of ${fmt(d.total)} (${pct(d.empty / d.total)}) retrieved no news and no web pages.</p><ul class="plain">${d.empty_recent.map((r) => `<li>${esc(r.question)}<br><small>${esc(r.command)}${r.route ? ` · ${esc(r.route)}` : ""} · ${esc(when(r.created_at))}</small></li>`).join("")}</ul>`
+    : `<p class="sub">None: every search found something.</p>`);
+  c.insertAdjacentHTML("beforeend", tableView([{ label: "Day" }, ...series.map((s) => ({ label: s.name, num: true }))], d.days.map((x, i) => [esc(day(x)), ...series.map((s) => fmt(s.values[i]))]), "Show questions per day as a table"));
+}
+
+const MODES = ["hybrid", "keyword", "vector"];
+function renderEvals(d) {
+  const c = card("Eval history", "Scores from each <code>zands eval</code> run on the known-answer questions, so regressions show up.", true);
+  if (!d.retrieval.length && !d.routes.length) {
+    c.insertAdjacentHTML("beforeend", empty(d.collecting_since, "Run <code>zands eval</code> (retrieval) or <code>zands eval --routes</code> (router) to add the first point."));
+    return;
+  }
+  if (d.retrieval.length) {
+    const runs = [...new Set(d.retrieval.map((r) => r.created_at.slice(0, 16)))];
+    const modes = [...new Set(d.retrieval.map((r) => r.mode))].sort((a, b) => (MODES.indexOf(a) + 9) % 9 - (MODES.indexOf(b) + 9) % 9);
+    const colorOf = (m) => color(MODES.includes(m) ? MODES.indexOf(m) : 3 + modes.indexOf(m));
+    c.insertAdjacentHTML("beforeend", legend(modes.map((m) => ({ name: m, color: colorOf(m) }))));
+    const xs = runs.map((r) => new Date(`${r}:00Z`).toLocaleDateString([], { month: "short", day: "numeric" }));
+    const pair = el(`<div class="split"></div>`); c.appendChild(pair);
+    for (const [metric, label] of [["hit1", "Hit@1"], ["mrr", "MRR"]]) {
+      const box = el(`<div><h3>${label}</h3></div>`); pair.appendChild(box);
+      lines(box, { xs, height: 130, yfmt: metric === "hit1" ? (v) => pct(v) : (v) => v.toFixed(1),
+        series: modes.map((m) => ({ name: m, color: colorOf(m), points: d.retrieval.filter((r) => r.mode === m).map((r) => ({
+          x: runs.indexOf(r.created_at.slice(0, 16)), y: r[metric],
+          tip: `<b>${esc(m)}${r.rerank ? " + rerank" : ""}</b> · ${esc(when(r.created_at))}<br>hit@1 ${pct(r.hit1)} · hit@3 ${pct(r.hit3)} · MRR ${r.mrr.toFixed(2)}<br><span class="k">${r.scored} of ${r.questions} questions scored</span>` })) })) });
+    }
+    c.insertAdjacentHTML("beforeend", tableView([{ label: "Run" }, { label: "Mode" }, { label: "Hit@1", num: true }, { label: "Hit@3", num: true }, { label: "MRR", num: true }, { label: "Scored", num: true }],
+      d.retrieval.slice().reverse().map((r) => [esc(when(r.created_at)), esc(r.mode + (r.rerank ? " + rerank" : "")), pct(r.hit1), pct(r.hit3), r.mrr.toFixed(2), `${r.scored}/${r.questions}`])));
+  }
+  c.insertAdjacentHTML("beforeend", `<h3>Router accuracy</h3>`);
+  if (!d.routes.length) { c.insertAdjacentHTML("beforeend", empty(d.collecting_since, "Run <code>zands eval --routes</code> to add the first point.")); return; }
+  const last = d.routes[d.routes.length - 1];
+  c.insertAdjacentHTML("beforeend", `<p class="sub">Latest: ${fmt(last.correct)}/${fmt(last.questions)} correct (${pct(last.accuracy)}) with ${esc(last.mode)}, ${esc(when(last.created_at))}.</p>`);
+  if (d.routes.length > 1) {
+    const box = el(`<div></div>`); c.appendChild(box);
+    lines(box, { xs: d.routes.map((r) => new Date(r.created_at).toLocaleDateString([], { month: "short", day: "numeric" })), height: 110, yfmt: (v) => pct(v),
+      series: [{ name: "accuracy", color: "var(--s1)", points: d.routes.map((r, i) => ({ x: i, y: r.accuracy, tip: `${pct(r.accuracy)} · ${r.correct}/${r.questions} · ${esc(r.mode)}<br>${esc(when(r.created_at))}` })) }] });
+  }
+}
+
+// ---------------------------------------------------------------- load and refresh
+let data = null;
+function render() {
+  if (!data) return;
+  const main = document.getElementById("main");
+  main.innerHTML = "";
+  renderCoverage(data.coverage);
+  renderIngested(data.ingested);
+  renderFeeds(data.feeds);
+  renderDigest(data.digest);
+  renderTopics(data.topics);
+  renderRetrievals(data.retrievals);
+  renderEvals(data.evals);
+  drawQueue.splice(0).forEach((draw) => draw());
+  document.getElementById("meta").textContent = `Updated ${new Date(data.generated_at).toLocaleTimeString()} · refreshes every minute · read-only`;
+}
+async function load() {
+  const main = document.getElementById("main");
+  main.classList.add("loading"); // hold the previous render while refetching
+  try {
+    const res = await fetch("api/all.json", { cache: "no-store" });
+    if (!res.ok) throw new Error(`${res.status} ${await res.text()}`);
+    data = await res.json();
+    render();
+  } catch (e) {
+    document.getElementById("meta").innerHTML = `<span class="error">Couldn't load data: ${esc(e.message)}</span>`;
+  } finally {
+    main.classList.remove("loading");
+  }
+}
+let resizeTimer;
+window.addEventListener("resize", () => { clearTimeout(resizeTimer); resizeTimer = setTimeout(render, 150); });
+load();
+setInterval(load, 60000);
+</script>
+</body>
+</html>

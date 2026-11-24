@@ -66,6 +66,7 @@ class IngestReport:
     seconds: float = 0.0
     embedded: int = 0
     embed_error: str | None = None  # set when embedding was skipped or failed (keyword search still works)
+    attempted_embed: bool = False
 
     @property
     def new(self) -> int:
@@ -269,6 +270,7 @@ def run_ingest(
     are stored and searchable by keyword, and the next run backfills vectors.
     """
     start = time.monotonic()
+    started_at = store.utcnow()
     report = IngestReport()
     own_client = client is None
     client = client or make_client()
@@ -286,6 +288,7 @@ def run_ingest(
         if own_client:
             client.close()
     if embedder is not None:
+        report.attempted_embed = True
         if not getattr(conn, "vec_enabled", False):
             report.embed_error = f"sqlite-vec unavailable: {getattr(conn, 'vec_error', None)}"
         else:
@@ -296,4 +299,8 @@ def run_ingest(
         if report.embed_error:
             log.warning("embedding skipped: %s (keyword search still works; next run retries)", report.embed_error)
     report.seconds = time.monotonic() - start
+    try:
+        store.record_ingest_run(conn, report, started_at)
+    except sqlite3.Error as exc:  # run history is for the dashboard; never fail an ingest over it
+        log.warning("could not record the ingest run: %s", exc)
     return report

@@ -1,3 +1,5 @@
+import json
+
 import pytest
 
 from zands import evaluate, store
@@ -62,3 +64,13 @@ def test_answer_checks(db):
     rep = evaluate.run_mode(db, QUESTIONS[:1], "keyword", answer_fn=lambda q, hits: "No idea.")
     assert rep.answer_rate == 0.0
     assert evaluate.answer_matches("It was on 16 December.", ["December 16", "16 December"])
+
+
+def test_scores_are_recorded(db):
+    rep = evaluate.run_mode(db, QUESTIONS, "keyword", k=3)
+    evaluate.record_mode_report(db, rep, len(QUESTIONS))
+    row = db.execute("SELECT * FROM eval_runs").fetchone()
+    assert (row["kind"], row["mode"], row["k"], row["questions"], row["scored"]) == ("retrieval", "keyword", 3, 4, 3)
+    assert row["hit1"] == rep.hit_rate(1) and row["mrr"] == rep.mrr and row["rerank"] == 0
+    logged = db.execute("SELECT hit_sources FROM retrieval_log WHERE command = 'eval'").fetchall()
+    assert all(json.loads(r[0])["vector"] == 0 for r in logged)  # keyword mode: no vector hits

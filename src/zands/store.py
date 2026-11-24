@@ -13,7 +13,7 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 log = logging.getLogger(__name__)
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 EMBED_DIM = 768  # nomic-embed-text
 
 SCHEMA = """
@@ -86,7 +86,8 @@ CREATE TABLE IF NOT EXISTS retrieval_log (
     fact_ids   TEXT,                             -- JSON array of facts put in the prompt (ask only)
     route        TEXT,                           -- ask only: 'news' / 'knowledge' / 'web' / 'none'
     route_reason TEXT,                           -- why: which rule fired, classifier output, gate decision
-    web_urls     TEXT                            -- JSON array of web result URLs put in the prompt
+    web_urls     TEXT,                           -- JSON array of web result URLs put in the prompt
+    hit_sources  TEXT                            -- JSON {"keyword", "vector", "both", "fusion"}: which retriever had each hit in its own top k
 );
 
 -- Today's top stories, rebuilt after every ingest (one row per UTC day, latest build wins).
@@ -110,6 +111,47 @@ CREATE TABLE IF NOT EXISTS facts (
     added_at   TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS facts_subject ON facts(subject COLLATE NOCASE, attribute COLLATE NOCASE);
+
+-- One row per `zands ingest` run, plus one row per feed in that run (for the dashboard).
+CREATE TABLE IF NOT EXISTS ingest_runs (
+    id           INTEGER PRIMARY KEY,
+    started_at   TEXT NOT NULL,
+    finished_at  TEXT NOT NULL,
+    seconds      REAL NOT NULL,
+    new_articles INTEGER NOT NULL,
+    feeds_ok     INTEGER NOT NULL,
+    feeds_failed INTEGER NOT NULL,
+    embedded     INTEGER,                        -- NULL when embedding wasn't attempted
+    embed_error  TEXT
+);
+CREATE TABLE IF NOT EXISTS ingest_feed_runs (
+    run_id    INTEGER NOT NULL REFERENCES ingest_runs(id) ON DELETE CASCADE,
+    feed      TEXT NOT NULL,
+    ok        INTEGER NOT NULL,
+    new_items INTEGER NOT NULL,
+    skipped   INTEGER NOT NULL,
+    error     TEXT,
+    PRIMARY KEY (run_id, feed)
+);
+
+-- One row per `zands eval` score: kind 'retrieval' (one per mode) or 'routes'.
+CREATE TABLE IF NOT EXISTS eval_runs (
+    id          INTEGER PRIMARY KEY,
+    created_at  TEXT NOT NULL,
+    kind        TEXT NOT NULL,
+    mode        TEXT,                            -- retrieval mode, or 'rules+model' / 'rules' for routes
+    k           INTEGER,
+    questions   INTEGER NOT NULL,
+    scored      INTEGER,
+    hit1        REAL,
+    hit3        REAL,
+    hitk        REAL,
+    mrr         REAL,
+    fallbacks   INTEGER,
+    answer_rate REAL,
+    rerank      INTEGER NOT NULL DEFAULT 0,
+    accuracy    REAL                             -- routes only
+);
 
 CREATE TABLE IF NOT EXISTS meta (
     key   TEXT PRIMARY KEY,
@@ -135,7 +177,12 @@ MIGRATIONS = [
     ("retrieval_log", "route", "TEXT"),
     ("retrieval_log", "route_reason", "TEXT"),
     ("retrieval_log", "web_urls", "TEXT"),
+    ("retrieval_log", "hit_sources", "TEXT"),
 ]
+
+# Data the dashboard needs that older databases never recorded. connect() stamps the first
+# time each one existed, so the dashboard can say "collecting since <date>" instead of zero.
+COLLECTED = ("ingest_runs", "eval_runs", "hit_sources")
 
 # Query parameters that only track clicks; dropping them keeps one URL per article.
 TRACKING_PARAMS = {
@@ -225,6 +272,10 @@ def connect(path: str | Path, vector: bool = True) -> Connection:
     conn.execute("PRAGMA busy_timeout = 5000")
     conn.executescript(SCHEMA)
     _migrate(conn)
+    now = utcnow()
+    conn.executemany(
+        "INSERT OR IGNORE INTO meta(key, value) VALUES (?, ?)", [(f"collecting_since:{name}", now) for name in COLLECTED]
+    )
     if vector:
         try:
             load_vec(conn)
@@ -380,13 +431,15 @@ def log_retrieval(
     command: str | None = None,
     mode: str | None = None,
     fact_ids: list[int] | None = None,
+    hit_sources: dict[str, int] | None = None,
 ) -> int:
     cur = conn.execute(
-        """INSERT INTO retrieval_log(created_at, command, question, query, k, chunk_ids, mode, fact_ids)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+        """INSERT INTO retrieval_log(created_at, command, question, query, k, chunk_ids, mode, fact_ids, hit_sources)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (
             utcnow(), command, question, query, k, json.dumps(chunk_ids), mode,
             json.dumps(fact_ids) if fact_ids is not None else None,
+            json.dumps(hit_sources) if hit_sources is not None else None,
         ),
     )
     conn.commit()
@@ -416,6 +469,41 @@ def set_log_route(
         ),
     )
     conn.commit()
+
+
+def collecting_since(conn: sqlite3.Connection, name: str) -> str | None:
+    return get_meta(conn, f"collecting_since:{name}")
+
+
+def record_ingest_run(conn: sqlite3.Connection, report, started_at: str) -> int:
+    """Store one ingest run (an ingest.IngestReport) and its per-feed results."""
+    cur = conn.execute(
+        """INSERT INTO ingest_runs(started_at, finished_at, seconds, new_articles, feeds_ok, feeds_failed,
+                                   embedded, embed_error) VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+        (
+            started_at, utcnow(), round(report.seconds, 2), report.new,
+            sum(f.ok for f in report.feeds), sum(not f.ok for f in report.feeds),
+            report.embedded if report.attempted_embed else None, report.embed_error,
+        ),
+    )
+    run_id = cur.lastrowid
+    conn.executemany(
+        "INSERT OR REPLACE INTO ingest_feed_runs(run_id, feed, ok, new_items, skipped, error) VALUES (?, ?, ?, ?, ?, ?)",
+        [(run_id, f.name, int(f.ok), f.new, f.skipped, (f.error or None) and f.error[:500]) for f in report.feeds],
+    )
+    conn.commit()
+    return run_id
+
+
+def record_eval_run(conn: sqlite3.Connection, kind: str, questions: int, **fields) -> int:
+    """Store one eval score. fields are eval_runs columns (mode, k, scored, hit1, hit3, hitk, mrr, ...)."""
+    cols = ["created_at", "kind", "questions", *fields]
+    cur = conn.execute(
+        f"INSERT INTO eval_runs({', '.join(cols)}) VALUES ({', '.join('?' * len(cols))})",
+        (utcnow(), kind, questions, *fields.values()),
+    )
+    conn.commit()
+    return cur.lastrowid
 
 
 def stats(conn: sqlite3.Connection) -> dict:

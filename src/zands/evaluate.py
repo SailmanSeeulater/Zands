@@ -7,6 +7,7 @@ import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from . import store
 from .search import retrieve
 
 DEFAULT_QUESTIONS = "eval/questions.toml"
@@ -173,3 +174,19 @@ def run_routes(cases: list[RouteCase], use_model: bool = True, model: str | None
         RouteResult(c, route(c.q, use_model=use_model, model=model, base_url=base_url, classifier=classifier))
         for c in cases
     ])
+
+
+def record_mode_report(conn: sqlite3.Connection, rep: ModeReport, questions: int, rerank: bool = False) -> int:
+    """Keep one retrieval score in eval_runs (the dashboard's eval history)."""
+    return store.record_eval_run(
+        conn, "retrieval", questions, mode=rep.mode, k=rep.k, scored=len(rep.scored),
+        hit1=rep.hit_rate(1), hit3=rep.hit_rate(3), hitk=rep.hit_rate(), mrr=rep.mrr,
+        fallbacks=rep.fallbacks, answer_rate=rep.answer_rate, rerank=int(rerank),
+    )
+
+
+def record_route_report(conn: sqlite3.Connection, rep: RouteReport, use_model: bool = True) -> int:
+    return store.record_eval_run(
+        conn, "routes", len(rep.results), mode="rules+model" if use_model else "rules",
+        scored=rep.correct, accuracy=rep.accuracy,
+    )

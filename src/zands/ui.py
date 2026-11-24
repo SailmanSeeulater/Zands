@@ -20,6 +20,9 @@ METADATA = {
                 "facts": {"description": "Fact overrides put first in `zands ask` prompts while current."},
                 "retrieval_log": {"description": "Every search/ask/eval/mcp retrieval with mode, route and why.", "sort_desc": "id"},
                 "digests": {"description": "Today's top stories, rebuilt after every ingest (one row per day).", "sort_desc": "day"},
+                "ingest_runs": {"description": "One row per ingest run: new articles, failed feeds, embedding.", "sort_desc": "id"},
+                "ingest_feed_runs": {"description": "Per-feed results of each ingest run."},
+                "eval_runs": {"description": "Scores from each `zands eval` run (retrieval per mode, or routes).", "sort_desc": "id"},
             },
             "queries": {
                 "recent_retrievals": {

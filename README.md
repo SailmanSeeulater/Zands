@@ -70,6 +70,7 @@ uv run zands eval                        # known-answer set: keyword vs hybrid h
 uv run zands eval --routes               # router accuracy on eval/routes.toml
 uv run zands mcp                         # MCP server on stdio (see "MCP server" below)
 uv run zands ui                          # Datasette on http://127.0.0.1:8001/
+uv run zands dashboard                   # charts on http://127.0.0.1:8002/ (read-only)
 uv run zands schedule install            # hourly ingest via launchd (status / uninstall)
 uv run zands stats                       # counts and per-feed health
 ```
@@ -143,9 +144,11 @@ published date.
 | `chunks_fts` | FTS5 external-content index over chunk title + body (porter stemming), kept in sync by triggers |
 | `chunk_vec` | sqlite-vec `vec0` table: one 768-d cosine vector per chunk, deleted with its chunk by trigger |
 | `facts` | fact overrides: subject, attribute, value, valid_from, valid_to, source_url, added_at |
-| `retrieval_log` | every retrieval: time, command, question, FTS query, k, chunk ids in rank order, effective mode, facts used, route + reason, web URLs |
+| `retrieval_log` | every retrieval: time, command, question, FTS query, k, chunk ids in rank order, effective mode, facts used, route + reason, web URLs, which retriever had each hit in its own top k |
 | `digests` | today's top stories (one row per UTC day, rebuilt after every ingest) |
-| `meta` | which embedding model made the stored vectors |
+| `ingest_runs`, `ingest_feed_runs` | one row per ingest run (new articles, failed feeds, chunks embedded, duration) and one per feed in it |
+| `eval_runs` | every `zands eval` score: hit@1/3/k and MRR per retrieval mode, or router accuracy |
+| `meta` | which embedding model made the stored vectors; when run history started being recorded |
 
 New columns are added to existing databases automatically on open; no manual migration.
 
@@ -275,6 +278,35 @@ database with sqlite-vec loaded, read-only (no write plugins), plus canned queri
 retrievals with their top hit, questions that retrieved nothing, feed health, articles per
 day, current facts.
 
+**Dashboard** (`src/zands/dashboard.py`, `src/zands/dashboard.html`). `zands dashboard` serves
+one page of charts on 127.0.0.1:8002 (`--port`, `--host`), refreshed every minute. It is a stdlib
+`http.server` with one JSON endpoint per panel (`/api/<panel>.json`, plus `/api/all.json`); every
+request opens the database read-only (`mode=ro`). The charts are hand-drawn SVG in a single HTML
+file with no external scripts, so the page works offline. It follows the system light/dark
+setting, and a button switches theme. Every chart has hover tooltips and a "Show table" view.
+Panels:
+- **Coverage and size:** articles, chunks, vectors (share embedded), database size, fact
+  overrides current/expired, questions logged.
+- **Articles stored over time:** new articles per feed by fetch time; hourly while the index has
+  under three days of history, daily after that. The seven largest feeds get their own colour and
+  the rest fold into "Other".
+- **Feed health:** status (OK / stale after three missed hourly runs / failing), last success,
+  last run's new items, the last error, and new articles per ingest run.
+- **Today's digest:** stories ranked by how many distinct outlets covered them.
+- **Headline topics:** the most frequent headline words per day over the last week, counted once
+  per headline (a cheap stand-in for entity extraction).
+- **Questions and retrieval:** questions per day by command, router decisions, retrieval modes,
+  where the hits came from, and questions that found nothing. Eval runs are left out.
+- **Eval history:** hit@1 and MRR per retrieval mode for each `zands eval` run, and router
+  accuracy for each `zands eval --routes`.
+
+Three panels use data that older versions didn't record: ingest runs, eval runs, and which
+retriever found each hit. These are recorded from the first time the new version opens the
+database. Until there's data, those panels show "collecting since <date>". The hit breakdown
+counts a hit as *keyword* or *vector* when only that retriever ranked it in its own top k,
+*both* when each did, and *neither (fusion)* when RRF plus the recency boost lifted it. Counting
+over the full 50-candidate lists would be useless, since nearly every hybrid hit appears in both.
+
 ## Evaluation
 
 `eval/questions.toml` holds 20 known-answer questions about articles ingested on 2026-11-24:
@@ -298,6 +330,13 @@ I checked the three failures by hand, and all three answers were correct. Two fa
 the keyword lists were too narrow: the articles say "$43.9 billion" and "at least 23", not "44"
 and "20"; the lists are fixed now. The third was correct when re-asked, so answers vary
 somewhat from run to run.
+
+Re-run the same evening (549 articles): hybrid hit@1 60%, MRR 0.78; keyword hit@1 60%, MRR 0.75;
+hit@3 still 95–100%. The code from before the dashboard scores exactly the same, so the drop
+comes from the growing index, not a code change. Newer articles on the same stories now outrank
+the single article each question expects, helped by the recency boost. The question set is
+pinned to one day's articles, so expect this drift until it's refreshed. The dashboard's eval
+history tracks it from now on.
 
 Both modes find every article somewhere in the top 8. Hybrid's gain is in putting it first.
 The set is small and was written by the same session that built the system, so treat these as
@@ -337,6 +376,11 @@ No test touches the network: Ollama is replaced by a deterministic fake embedder
 - SearXNG client and page selection against a fake transport, saving web pages; digest
   grouping, ranking, rendering and the no-vector fallback; the MCP server through an in-process
   client; reranker parsing and failure handling
+- the dashboard: every panel on a fixture database (hourly vs daily buckets, folding feeds into
+  "Other", distinct digest outlets, headline topics, which questions count as misses), the
+  "collecting since" empty states, recording of ingest/eval runs and per-hit retriever sources,
+  that the connection is read-only, and the HTTP server (page has no external URLs, per-panel
+  endpoints, 404s)
 
 The suite also passes with `OLLAMA_HOST` and `ZANDS_SEARXNG_URL` pointed at a dead port.
 
@@ -354,30 +398,18 @@ post-retrieval gate and route logging; SearXNG web fallback (optionally saved in
 LLM-free daily digest in prompts and as its own route; MCP server (`search_news`,
 `latest_digest`); an opt-in reranker (measured, off by default).
 
-**Next: `zands dashboard` (planned, not built).** One local page of charts over `news.db`, for
-trends that Datasette's tables don't show. Panels:
-- articles ingested over time, per feed
-- feed health: last success, failures, new articles per run
-- today's digest: the stories and how many outlets covered each
-- top entities and topics over time
-- retrieval log: questions per day, router routes, keyword vs vector vs web hits, empty retrievals
-- eval history: hit@1 and MRR per run, so regressions show up
-- coverage and size: chunks vs vectors, DB file size, fact overrides current vs expired
-
-Implementation choice: a stdlib `http.server` on 127.0.0.1 that serves one static HTML page and a
-few read-only JSON endpoints (one SQL query per panel, opened with `mode=ro`), with Vega-Lite
-vendored into the package so it works offline. That adds no Python dependencies and keeps the
-panel queries next to the existing canned queries in `ui.py`. Datasette plugins
-(datasette-dashboards, datasette-vega) were the alternative. They were set aside because they add
-dependencies tied to Datasette's plugin API and are harder to test offline.
-
-Three panels need data Zands doesn't keep yet:
-- *Per-run feed history:* `feeds.last_new_items` holds only the latest run, so this needs an `ingest_runs` table.
-- *Eval history:* `zands eval` prints its results but doesn't store them, so this needs an `eval_runs` table.
-- *Entities and topics:* nothing extracts them today. Start with headline word counts; real entity extraction can come later.
+**Phase 4: dashboard (done).** `zands dashboard`: a read-only stdlib server with one page of
+offline SVG charts (coverage, ingest over time, feed health, digest, headline topics, retrieval
+log, eval history). New run history (`ingest_runs`, `eval_runs`, per-hit retriever sources) fills
+the panels that older databases had no data for. Datasette plugins were considered and set aside
+because they add dependencies. A charting library was set aside because the page would have
+needed a vendored bundle of about 1 MB.
 
 **Possible next steps.**
 - Structured APIs for the `web` route's live data (weather, exchange rates), instead of scraping search results.
 - Retention: drop articles older than N months and compact the file (the index grows about 1–2 GB a year).
-- More known-answer and router questions as the news moves on, written before looking at results.
+- More known-answer and router questions as the news moves on, written before looking at results. The
+  current set is pinned to 2026-11-24 and already drifting (see Evaluation); accepting any
+  article on the same story as a hit would make it age better.
+- Real entity extraction for the topics panel (headline word counts merge "Jensen" and "Huang" as separate topics).
 - Connect zwans to `zands mcp` (configuration on the zwans side).
