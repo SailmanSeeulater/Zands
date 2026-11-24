@@ -9,6 +9,7 @@ from datetime import date
 
 import httpx
 
+from .facts import Fact
 from .search import Hit
 
 DEFAULT_MODEL = "qwen2.5:latest"
@@ -29,12 +30,21 @@ def default_ollama_url() -> str:
 
 SYSTEM_TEMPLATE = """You are a careful news assistant. Today's date is {today}.
 
-Answer the user's question using ONLY the numbered news sources provided in the message.
+Answer the user's question using ONLY the {material} provided in the message.
 - Cite every factual claim with the source number in square brackets, like [1] or [2][3].
 - If the sources do not cover the question, or only partly cover it, say so plainly. Do not fill gaps from memory.
 - Your own training data is older than these sources; when they conflict, trust the sources.
 - Mention dates when timing matters, relative to today's date.
 - Be concise."""
+
+FACTS_RULES = """
+- The VERIFIED FACTS ([F1], [F2], ...) are authoritative, dated corrections. They are true as of
+  today and override both your training knowledge and the news sources when they conflict.
+  Cite them like [F1]."""
+
+
+def _human_date(d: date) -> str:
+    return d.strftime("%A, %B %d, %Y").replace(" 0", " ")
 
 
 def format_sources(hits: list[Hit]) -> str:
@@ -45,12 +55,30 @@ def format_sources(hits: list[Hit]) -> str:
     return "\n\n---\n\n".join(blocks)
 
 
-def build_messages(question: str, hits: list[Hit], today: date | None = None) -> list[dict]:
+def format_facts(facts: list[Fact]) -> str:
+    lines = []
+    for i, f in enumerate(facts, 1):
+        source = f"; source: {f.source_url}" if f.source_url else ""
+        lines.append(f"[F{i}] {f.subject} | {f.attribute}: {f.value} (true since {f.valid_from}{source})")
+    return "\n".join(lines)
+
+
+def build_messages(
+    question: str, hits: list[Hit], today: date | None = None, facts: list[Fact] | None = None
+) -> list[dict]:
     today = today or date.today()
-    user = f"Sources:\n\n{format_sources(hits)}\n\n===\n\nQuestion: {question}"
+    facts = facts or []
+    parts = []
+    if facts:
+        parts.append(f"VERIFIED FACTS (authoritative as of {today.isoformat()}):\n{format_facts(facts)}")
+    if hits:
+        parts.append(f"News sources:\n\n{format_sources(hits)}")
+    parts.append(f"Question: {question}")
+    material = "verified facts and numbered news sources" if facts else "numbered news sources"
+    system = SYSTEM_TEMPLATE.format(today=_human_date(today), material=material) + (FACTS_RULES if facts else "")
     return [
-        {"role": "system", "content": SYSTEM_TEMPLATE.format(today=today.strftime("%A, %B %d, %Y").replace(" 0", " "))},
-        {"role": "user", "content": user},
+        {"role": "system", "content": system},
+        {"role": "user", "content": "\n\n===\n\n".join(parts)},
     ]
 
 
