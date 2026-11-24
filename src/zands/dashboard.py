@@ -289,11 +289,12 @@ def retrievals(conn: sqlite3.Connection, now: datetime | None = None, days: int 
 
 def evals(conn: sqlite3.Connection, now: datetime | None = None) -> dict:
     retrieval = [dict(r) for r in conn.execute(
-        "SELECT id, created_at, mode, k, questions, scored, hit1, hit3, hitk, mrr, fallbacks, answer_rate, rerank "
+        "SELECT id, created_at, mode, k, questions, scored, hit1, hit3, hitk, mrr, fallbacks, answer_rate, rerank, "
+        "question_set "
         "FROM eval_runs WHERE kind = 'retrieval' ORDER BY id"
     )]
     routes = [dict(r) for r in conn.execute(
-        "SELECT id, created_at, mode, questions, scored AS correct, accuracy FROM eval_runs "
+        "SELECT id, created_at, mode, questions, scored AS correct, accuracy, question_set FROM eval_runs "
         "WHERE kind = 'routes' ORDER BY id"
     )]
     return {"retrieval": retrieval, "routes": routes, "collecting_since": _collecting(conn, "eval_runs")}

@@ -1,132 +1,242 @@
 # Known-answer test set for `zands eval`.
 #
-# Each [[question]] has:
+# Each question block has:
 #   q          the question, as a user would ask it
-#   expect_url substrings of article URLs; retrieval is a hit if any top-k chunk comes from a matching article
+#   expect_url substrings of article URLs that answer it
+#   same_story (optional) terms that identify the story; "a|b" means either. A retrieved chunk that
+#              contains every term also counts as a hit, so the question keeps working when other
+#              outlets (or later articles) cover the same story. `zands eval --list` marks those hits "~".
 #   answer_any (optional) words/phrases; with `zands eval --answers` the model's answer must contain one
 #   style      "keyword" (shares words with the headline) or "paraphrase" (deliberately avoids them)
 #
-# Built from the articles ingested on 2026-11-24. Articles are never deleted, so these stay valid
-# for this database; a question whose articles aren't in the database is reported as "missing"
-# rather than as a miss. Add new questions as the news moves on; don't tune retrieval against
-# questions written after looking at what it retrieves.
+# Questions 1-20 were written from the articles ingested on the morning of 2026-11-24, 21-32 from
+# that afternoon and evening's ingests. Articles are never deleted, so these stay valid for this
+# database; a question with no matching article is reported as "missing" rather than as a miss.
+# Add new questions as the news moves on; don't tune retrieval against questions written after
+# looking at what it retrieves.
 
 [[question]]
 q = "Which Star Trek actor died, and how old was he?"
 expect_url = ["star-trek-star-patrick-stewart-dies"]
+same_story = ["Patrick Stewart", "died|dies|death", "86"]
 answer_any = ["86"]
 style = "keyword"
 
 [[question]]
 q = "When does Bangladesh's ousted former prime minister plan to come home?"
 expect_url = ["sheikh-hasina-plans-to-return"]
+same_story = ["Hasina", "return", "16 December|December 16|Dec 16"]
 answer_any = ["December 16", "16 December", "Dec 16"]
 style = "paraphrase"
 
 [[question]]
 q = "What did Baghdad order about oil production in the semi-autonomous north?"
 expect_url = ["iraq-orders-takeover-of-oilfields"]
+same_story = ["Iraq|Baghdad", "oil", "Kurd"]
 answer_any = ["Kurdish", "Kurdistan"]
 style = "paraphrase"
 
 [[question]]
 q = "How many people died from hot weather in England this summer?"
 expect_url = ["summer-heat-deaths-record-high-england"]
+same_story = ["heat-related|heat-linked|heat deaths|hot weather|heatwave", "deaths", "England"]
 answer_any = ["5,258", "5258"]
 style = "paraphrase"
 
 [[question]]
 q = "How did the COP31 climate summit end?"
 expect_url = ["cop31-ends-in-failure", "cop31-climate-talks-end-without-consensus"]
+same_story = ["COP31|COP 31|climate talks|UN climate", "ended in|ended without|ended on|failure of|failed talks|failed climate|ends in failure|ended in collapse"]
 answer_any = ["fossil", "consensus", "failure", "split"]
 style = "keyword"
 
 [[question]]
 q = "How far from Earth is NASA's oldest interstellar probe now?"
 expect_url = ["voyager-1-reaches-a-light-day"]
+same_story = ["Voyager", "light-day|light day"]
 answer_any = ["light-day", "light day"]
 style = "paraphrase"
 
 [[question]]
 q = "Which Mexican drug cartel boss was captured by troops?"
 expect_url = ["el-chapo-isidro"]
+same_story = ["Isidro", "captur|arrest"]
 answer_any = ["Isidro"]
 style = "keyword"
 
 [[question]]
 q = "What penalties is Canberra threatening social media platforms with?"
 expect_url = ["australia-warns-tech-giants"]
+same_story = ["Australia|Canberra", "fine", "social media|tech giants|platforms"]
 answer_any = ["fine", "billion"]
 style = "paraphrase"
 
 [[question]]
 q = "Why are German factory workers walking off the job?"
 expect_url = ["metalworkers-go-on-strike"]
+same_story = ["strike|walkout|walk out", "IG Metall|metalworkers"]
 answer_any = ["pay", "wage", "IG Metall"]
 style = "paraphrase"
 
 [[question]]
 q = "Why are US states suing SpaceX over Grok?"
 expect_url = ["states-sue-spacex"]
+same_story = ["Grok", "sue|lawsuit", "states|attorneys general"]
 answer_any = ["image", "porn", "sex"]
 style = "keyword"
 
 [[question]]
 q = "Did a Russian aircraft enter Finland's airspace?"
 expect_url = ["russian-helicopter-suspected-of-violating-finnish-airspace"]
+same_story = ["Finland|Finnish", "airspace", "helicopter"]
 answer_any = ["helicopter"]
 style = "paraphrase"
 
 [[question]]
 q = "What did Amazon reveal about attackers using autonomous AI to break into systems?"
 expect_url = ["amazon-says-hackers-ai-agents"]
+same_story = ["Amazon", "AI agent|autonomous", "hack|attack"]
 answer_any = ["zero-day", "0-day", "root", "university"]
 style = "paraphrase"
 
 [[question]]
 q = "Who is back running Nvidia, and why is it controversial?"
 expect_url = ["huang"]
+same_story = ["Huang", "Nvidia", "reinstat|return"]
 answer_any = ["Huang"]
 style = "keyword"
 
 [[question]]
 q = "How much is CrowdStrike paying for Zscaler?"
 expect_url = ["crowdstrike-to-acquire-zscaler"]
+same_story = ["CrowdStrike", "Zscaler"]
 answer_any = ["44", "43.9"]
 style = "keyword"
 
 [[question]]
 q = "Where did Ukraine's naval drones hit a Russian warship?"
 expect_url = ["ukraines-sea-drones-blow-up-russian-warship", "russian-warships-off-libya", "keep-sinking-russian-ships"]
+same_story = ["Ukrain", "Libya|Benghazi", "warship|Russian ship", "drone"]
 answer_any = ["Benghazi", "Libya"]
 style = "keyword"
 
 [[question]]
 q = "Who will be the first foreigner to visit China's space station?"
 expect_url = ["pakistani-astronaut"]
+same_story = ["Pakistan", "space station|Tiangong"]
 answer_any = ["Pakistan", "Zeeshan"]
 style = "paraphrase"
 
 [[question]]
 q = "What happened to the Congolese military plane rebels say they shot down?"
 expect_url = ["cwy7r5z8gg65o"]
+same_story = ["Congo|Congolese", "plane|aircraft", "shot down|shoot down|downed"]
 answer_any = ["Cessna", "contact", "missing"]
 style = "keyword"
 
 [[question]]
 q = "How many were hurt in the car bombing in Colombia?"
 expect_url = ["cjqlq2n4np7do"]
+same_story = ["Colombia", "car bomb", "injur|hurt|wounded"]
 answer_any = ["20", "23"]
 style = "keyword"
 
 [[question]]
 q = "Which companies started testing self-driving taxis with no safety driver?"
 expect_url = ["uber-nuro-lucid-driverless-robotaxi"]
+same_story = ["Nuro", "Lucid"]
 answer_any = ["Uber", "Nuro", "Lucid"]
 style = "paraphrase"
 
 [[question]]
 q = "Which central bank's former directors profited from slavery?"
 expect_url = ["bank-of-england-directors-illegally-profited"]
+same_story = ["Bank of England", "slave"]
 answer_any = ["Bank of England"]
+style = "paraphrase"
+
+# ---- added 2026-11-24 evening, from the 15:36-20:37 UTC ingests
+
+[[question]]
+q = "Who did the Court of Arbitration for Sport name as 2025 Africa Cup of Nations champions?"
+expect_url = ["senegal-reinstated-as-2025-africa-cup", "cas-reinstates-senegal"]
+same_story = ["Senegal", "CAS|Court of Arbitration", "AFCON|Africa Cup of Nations"]
+answer_any = ["Senegal"]
+style = "keyword"
+
+[[question]]
+q = "How many AI-generated songs will Tidal delete?"
+expect_url = ["tidal-ai-music-ban", "tidal-to-ban-and-remove", "tidal-will-ban-fully-ai"]
+same_story = ["Tidal", "AI", "delete|remov|ban"]
+answer_any = ["27 million", "29 million"]
+style = "keyword"
+
+[[question]]
+q = "How many Boeing 737 planes is the China Southern subsidiary buying?"
+expect_url = ["china-southern-airlines-unit-to-buy-50-boeing"]
+same_story = ["Boeing", "Xiamen|China Southern"]
+answer_any = ["50"]
+style = "keyword"
+
+[[question]]
+q = "How much extra funding could NASA's Artemis program get from the White House?"
+expect_url = ["nasa-may-get-2-billion-boost"]
+same_story = ["Artemis", "2 billion|9.8 billion"]
+answer_any = ["2 billion", "$2bn", "9.8 billion"]
+style = "keyword"
+
+[[question]]
+q = "Why is the FAA investigating an Amazon delivery drone crash?"
+expect_url = ["amazon-delivery-drone-clips-cable"]
+same_story = ["Amazon", "drone", "FAA|garage"]
+answer_any = ["cable", "fiber", "garage"]
+style = "keyword"
+
+[[question]]
+q = "How many people have died of measles in the US this year?"
+expect_url = ["measles-death-toll-rises-to-14"]
+same_story = ["measles", "death|died", "14"]
+answer_any = ["14"]
+style = "keyword"
+
+[[question]]
+q = "Why will France's former first couple stand trial next year?"
+expect_url = ["c65y17pwv1z7o"]
+same_story = ["Sarkozy", "Bruni", "trial"]
+answer_any = ["witness", "testimony", "Gaddafi", "Libya"]
+style = "paraphrase"
+
+[[question]]
+q = "How long can people in Havana expect to live now, compared with a few years ago?"
+expect_url = ["cuba-life-expectancy-decline"]
+same_story = ["Cuba", "life expectancy"]
+answer_any = ["74.4", "78.8"]
+style = "paraphrase"
+
+[[question]]
+q = "Which country is behind the rise in people killed or maimed by buried explosives?"
+expect_url = ["global-landmine-casualties-hit-a-five-year-high"]
+same_story = ["landmine|land mine", "Myanmar", "five-year high|highest number"]
+answer_any = ["Myanmar"]
+style = "paraphrase"
+
+[[question]]
+q = "Who beat Scott DesJarlais in the House race?"
+expect_url = ["democrat-victoria-broderick-election-win"]
+same_story = ["Broderick", "DesJarlais"]
+answer_any = ["Broderick"]
+style = "paraphrase"
+
+[[question]]
+q = "What did the chipmaker's reinstated chief tell his workforce about his personal conduct?"
+expect_url = ["jensen-huang-nvidia-apologizes-staff"]
+same_story = ["Huang", "terrible mistakes|unfaithful"]
+answer_any = ["mistake", "unfaithful", "apolog", "affair"]
+style = "paraphrase"
+
+[[question]]
+q = "What did the Strasbourg judges decide about pushing back asylum seekers at the Belarus border?"
+expect_url = ["european-court-states-can-turn-back-migrants"]
+same_story = ["European Court of Human Rights|ECHR", "Belarus|Poland|Lithuania|Latvia"]
+answer_any = ["control", "turn back", "some cases"]
 style = "paraphrase"

@@ -150,7 +150,8 @@ CREATE TABLE IF NOT EXISTS eval_runs (
     fallbacks   INTEGER,
     answer_rate REAL,
     rerank      INTEGER NOT NULL DEFAULT 0,
-    accuracy    REAL                             -- routes only
+    accuracy    REAL,                            -- routes only
+    question_set TEXT                            -- short hash of the question file (a new set isn't a regression)
 );
 
 CREATE TABLE IF NOT EXISTS meta (
@@ -178,6 +179,7 @@ MIGRATIONS = [
     ("retrieval_log", "route_reason", "TEXT"),
     ("retrieval_log", "web_urls", "TEXT"),
     ("retrieval_log", "hit_sources", "TEXT"),
+    ("eval_runs", "question_set", "TEXT"),
 ]
 
 # Data the dashboard needs that older databases never recorded. connect() stamps the first

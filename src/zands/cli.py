@@ -239,7 +239,7 @@ def cmd_fact_expire(args: argparse.Namespace) -> int:
 
 
 def cmd_eval(args: argparse.Namespace) -> int:
-    from .evaluate import load_questions, record_mode_report, run_mode
+    from .evaluate import load_questions, question_set_id, record_mode_report, run_mode
 
     if args.routes:
         return _eval_routes(args)
@@ -264,7 +264,7 @@ def cmd_eval(args: argparse.Namespace) -> int:
         for rep in reports:
             print(f"\n== {rep.mode}")
             for r in rep.results:
-                status = "missing" if r.missing else (f"#{r.rank}" if r.rank else "MISS")
+                status = "missing" if r.missing else (f"#{r.rank}{'~' if r.same_story else ''}" if r.rank else "MISS")
                 ans = "" if r.answer_ok is None else ("  answer ok" if r.answer_ok else "  answer WRONG")
                 print(f"  {status:>7}  [{r.question.style[:4]}] {r.question.q}{ans}")
 
@@ -277,20 +277,24 @@ def cmd_eval(args: argparse.Namespace) -> int:
             f"{rep.mode:<20} {rep.hit_rate(1):>6.0%} {rep.hit_rate(3):>6.0%} {rep.hit_rate():>6.0%} {rep.mrr:>6.2f}"
             f"  {rep.hit_rate(style='keyword'):>8.0%} {rep.hit_rate(style='paraphrase'):>6.0%}  {rep.fallbacks}"
         )
+    same = ", ".join(f"{rep.mode} {rep.same_story_hits}" for rep in reports)
+    print(f"\nhits that were another article on the same story (marked ~ in --list): {same}")
     for rep in reports:
         if rep.answer_rate is not None:
             print(f"\nanswer check ({rep.mode}): {rep.answer_rate:.0%} of answers contain an expected keyword")
     for rep in reports:  # kept for the dashboard's eval history
-        record_mode_report(conn, rep, len(questions), rerank=bool(args.rerank and rep.mode != "keyword"))
+        record_mode_report(conn, rep, len(questions), rerank=bool(args.rerank and rep.mode != "keyword"),
+                           question_set=question_set_id(args.questions))
     return 0
 
 
 def _eval_routes(args: argparse.Namespace) -> int:
-    from .evaluate import load_routes, record_route_report, run_routes
+    from .evaluate import load_routes, question_set_id, record_route_report, run_routes
 
     cases = load_routes(args.routes_file)
     rep = run_routes(cases, use_model=not args.no_router, model=args.router_model, base_url=args.ollama_url)
-    record_route_report(store.connect(args.db), rep, use_model=not args.no_router)
+    record_route_report(store.connect(args.db), rep, use_model=not args.no_router,
+                        question_set=question_set_id(args.routes_file))
     for r in rep.results:
         mark = "ok " if r.ok else "BAD"
         print(f"  {mark} expect {r.case.expect:<9} got {r.got.route:<9} [{r.got.method}] {r.case.q}")

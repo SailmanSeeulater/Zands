@@ -309,15 +309,54 @@ over the full 50-candidate lists would be useless, since nearly every hybrid hit
 
 ## Evaluation
 
-`eval/questions.toml` holds 20 known-answer questions about articles ingested on 2026-11-24:
-10 that share words with the headline (`keyword` style) and 10 deliberately paraphrased
-(`paraphrase` style). Each lists URL substrings of the article(s) that answer it, plus answer
-keywords. `zands eval` reports, per mode, how often an expected article appears at rank 1, in
-the top 3 and in the top k, plus mean reciprocal rank. Questions whose articles aren't in the
-database are reported as missing, not as misses. `--answers` also asks the model and checks the
-answer keywords.
+`eval/questions.toml` holds 32 known-answer questions about articles ingested on 2026-11-24:
+20 written from the morning's articles and 12 from the afternoon and evening ingests. 15 share
+words with the headline (`keyword` style) and 17 deliberately avoid them (`paraphrase` style).
+Each question lists:
+- URL substrings of the article(s) that answer it
+- `same_story` terms that identify the story. A retrieved chunk containing all of them also
+  counts as a hit, marked `~` in `zands eval --list`. Terms match at the start of a word, and
+  `a|b` means either.
+- answer keywords
 
-Results on 2026-11-24 (348 articles, k = 8, default settings):
+`zands eval` reports, per mode, how often an answering article appears at rank 1, in the top 3
+and in the top k, plus mean reciprocal rank. Questions with no matching article in the database
+are reported as missing, not as misses. `--answers` also asks the model and checks the answer
+keywords. Each run is stored with a short hash of the question file, so the dashboard can mark
+where the set changed rather than showing it as a regression.
+
+**Current results** (2026-11-24 evening, 549 articles, 32 questions, k = 8):
+
+| Mode | hit@1 | hit@3 | hit@8 | MRR |
+|---|---|---|---|---|
+| keyword (BM25) | 88% | 91% | 94% | 0.89 |
+| hybrid (BM25 + nomic, RRF) | 88% | 97% | 97% | 0.92 |
+| vector only | 91% | 100% | 100% | 0.95 |
+
+Six of hybrid's hits were another outlet's article on the same story. All four hybrid questions
+not at rank 1 are paraphrases:
+- the German strike (#2)
+- Finland's airspace (#2)
+- what Huang told staff (#3), on the story with the most coverage in the index
+- which country drives the rise in landmine casualties (missed)
+
+Keyword search misses the last two entirely. On this set, vector-only edges out hybrid: the
+keyword half of the fusion pulls in articles that share words but miss the point. Twenty-eight
+of the 32 questions are at rank 1 in every mode, so the comparison rests on a handful of hard
+paraphrases. The 12 new questions turned out easier than the first 20.
+
+How the set was built: I wrote the questions and `same_story` terms before running retrieval,
+then checked the terms against the whole index and tightened any that matched unrelated stories
+(substring matching let "ended" match "attended"). I made one change after seeing results. The
+answer check showed that the landmine question was being credited with a Syria-focused article
+that mentions Myanmar only in passing, so I required "five-year high" as well. That turned a
+"hit" into the miss listed above.
+
+Answer check (hybrid, qwen2.5, run before that fix): 31 of 32 answers contained an expected
+keyword. The one failure was the landmine question. The model answered "Syria" from the article
+the fix now rejects.
+
+**Earlier results** (2026-11-24 morning, 348 articles, the first 20 questions, URL matches only):
 
 | Mode | hit@1 | hit@3 | hit@8 | MRR |
 |---|---|---|---|---|
@@ -331,14 +370,10 @@ the keyword lists were too narrow: the articles say "$43.9 billion" and "at leas
 and "20"; the lists are fixed now. The third was correct when re-asked, so answers vary
 somewhat from run to run.
 
-Re-run the same evening (549 articles): hybrid hit@1 60%, MRR 0.78; keyword hit@1 60%, MRR 0.75;
-hit@3 still 95–100%. The code from before the dashboard scores exactly the same, so the drop
-comes from the growing index, not a code change. Newer articles on the same stories now outrank
-the single article each question expects, helped by the recency boost. The question set is
-pinned to one day's articles, so expect this drift until it's refreshed. The dashboard's eval
-history tracks it from now on.
+Re-run that evening with URL matching only, those 20 dropped to hybrid hit@1 60% and MRR 0.78,
+with the same code. Five of the eight "misses" were another outlet's article on the same story,
+ranked above the one URL the question expected. That drift is why `same_story` exists.
 
-Both modes find every article somewhere in the top 8. Hybrid's gain is in putting it first.
 The set is small and was written by the same session that built the system, so treat these as
 a regression check, not a benchmark.
 
@@ -408,8 +443,7 @@ needed a vendored bundle of about 1 MB.
 **Possible next steps.**
 - Structured APIs for the `web` route's live data (weather, exchange rates), instead of scraping search results.
 - Retention: drop articles older than N months and compact the file (the index grows about 1–2 GB a year).
-- More known-answer and router questions as the news moves on, written before looking at results. The
-  current set is pinned to 2026-11-24 and already drifting (see Evaluation); accepting any
-  article on the same story as a hit would make it age better.
+- More known-answer and router questions as the news moves on, written before looking at results:
+  harder paraphrases, and questions on crowded stories, where the modes actually differ.
 - Real entity extraction for the topics panel (headline word counts merge "Jensen" and "Huang" as separate topics).
 - Connect zwans to `zands mcp` (configuration on the zwans side).

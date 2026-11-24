@@ -39,8 +39,38 @@ def test_load_questions(tmp_path):
 
 def test_shipped_question_set_is_valid():
     qs = evaluate.load_questions("eval/questions.toml")
-    assert len(qs) == 20
-    assert all(q.expect_url and q.answer_any and q.style in ("keyword", "paraphrase") for q in qs)
+    assert len(qs) == 32 and len({q.q for q in qs}) == len(qs)
+    assert all(q.expect_url and q.answer_any and q.same_story and q.style in ("keyword", "paraphrase") for q in qs)
+    assert sum(q.style == "paraphrase" for q in qs) == 17
+
+
+def test_same_story_terms_match_at_word_starts():
+    q = evaluate.Question(q="?", expect_url=["x"], same_story=["Ukrain", "Libya|Benghazi", "drone"])
+    assert q.matches_text("Ukrainian sea drones struck a ship off Benghazi")
+    assert not q.matches_text("Ukrainian drones struck a ship off Crimea")  # every term is needed
+    assert evaluate.Question(q="?", expect_url=[], same_story=["ended"]).matches_text("talks ended") and not \
+        evaluate.Question(q="?", expect_url=[], same_story=["ended"]).matches_text("she attended")
+    assert not evaluate.Question(q="?", expect_url=["x"]).matches_text("anything")  # no terms: URL only
+
+
+def test_same_story_hit_counts_and_is_marked(db):
+    store.insert_article(db, store.Article(url="https://other.example/eruption-update", title="Grindavik residents flee",
+                                           source="O", body="Residents fled Grindavik as lava advanced.",
+                                           extraction="rss", published_at="2026-11-24T10:00:00Z"),
+                         ["Residents fled Grindavik as lava advanced."])
+    q = evaluate.Question(q="Grindavik residents", expect_url=["not-in-db"], same_story=["Grindavik", "lava"])
+    [res] = evaluate.run_mode(db, [q], "keyword", k=3).results
+    assert not res.missing and res.rank == 1 and res.same_story
+    rep = evaluate.run_mode(db, [q, QUESTIONS[0]], "keyword", k=3)
+    assert rep.same_story_hits == 1
+
+
+def test_question_set_id_tracks_content(tmp_path):
+    a = tmp_path / "q.toml"
+    a.write_text('[[question]]\nq = "x"\nexpect_url = ["y"]\n')
+    first = evaluate.question_set_id(a)
+    a.write_text('[[question]]\nq = "x?"\nexpect_url = ["y"]\n')
+    assert len(first) == 8 and evaluate.question_set_id(a) != first
 
 
 def test_keyword_vs_hybrid(db):
@@ -68,8 +98,9 @@ def test_answer_checks(db):
 
 def test_scores_are_recorded(db):
     rep = evaluate.run_mode(db, QUESTIONS, "keyword", k=3)
-    evaluate.record_mode_report(db, rep, len(QUESTIONS))
+    evaluate.record_mode_report(db, rep, len(QUESTIONS), question_set="abcd1234")
     row = db.execute("SELECT * FROM eval_runs").fetchone()
+    assert row["question_set"] == "abcd1234"
     assert (row["kind"], row["mode"], row["k"], row["questions"], row["scored"]) == ("retrieval", "keyword", 3, 4, 3)
     assert row["hit1"] == rep.hit_rate(1) and row["mrr"] == rep.mrr and row["rerank"] == 0
     logged = db.execute("SELECT hit_sources FROM retrieval_log WHERE command = 'eval'").fetchall()

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import re
 import sqlite3
 import tomllib
 from dataclasses import dataclass, field
@@ -19,6 +21,22 @@ class Question:
     expect_url: list[str]
     answer_any: list[str] = field(default_factory=list)
     style: str = ""
+    same_story: list[str] = field(default_factory=list)  # terms ("a|b" = either); a chunk with all of them is a hit
+
+    def matches_url(self, url: str) -> bool:
+        return any(p in url for p in self.expect_url)
+
+    def matches_text(self, text: str) -> bool:
+        """True if text covers the same story: every same_story term (or one of its alternatives) appears
+        at the start of a word, so "Ukrain" matches "Ukrainian" but "ended" doesn't match "attended"."""
+        if not self.same_story:
+            return False
+        low = text.lower()
+        return all(any(_word_start(alt, low) for alt in term.split("|")) for term in self.same_story)
+
+
+def _word_start(term: str, low: str) -> bool:
+    return re.search(r"(?<!\w)" + re.escape(term.strip().lower()), low) is not None
 
 
 @dataclass
@@ -29,6 +47,7 @@ class QuestionResult:
     mode: str | None = None
     answer: str | None = None
     answer_ok: bool | None = None
+    same_story: bool = False  # the hit was another article on the same story, not an expect_url one
 
 
 @dataclass
@@ -52,6 +71,10 @@ class ModeReport:
         return sum(1 / r.rank for r in rs if r.rank) / len(rs) if rs else 0.0
 
     @property
+    def same_story_hits(self) -> int:
+        return sum(1 for r in self.scored if r.rank and r.same_story)
+
+    @property
     def fallbacks(self) -> int:
         return sum(1 for r in self.results if r.mode and "fallback" in r.mode)
 
@@ -73,15 +96,27 @@ def load_questions(path: str | Path) -> list[Question]:
                 expect_url=[urls] if isinstance(urls, str) else list(urls),
                 answer_any=list(item.get("answer_any", [])),
                 style=item.get("style", ""),
+                same_story=list(item.get("same_story", [])),
             )
         )
     return out
 
 
-def _in_db(conn: sqlite3.Connection, patterns: list[str]) -> bool:
-    return any(
-        conn.execute("SELECT 1 FROM articles WHERE instr(url, ?) > 0 LIMIT 1", (p,)).fetchone() for p in patterns
-    )
+def question_set_id(path: str | Path) -> str:
+    """Short content hash of a question file, so eval history can tell a new question set from a regression."""
+    return hashlib.sha256(Path(path).read_bytes()).hexdigest()[:8]
+
+
+def _in_db(conn: sqlite3.Connection, q: Question) -> bool:
+    if any(conn.execute("SELECT 1 FROM articles WHERE instr(url, ?) > 0 LIMIT 1", (p,)).fetchone() for p in q.expect_url):
+        return True
+    if not q.same_story:
+        return False
+    # Narrow with SQL on the first term, then check every term in Python.
+    first = [alt.strip() for alt in q.same_story[0].split("|")]
+    where = " OR ".join("instr(lower(title || ' ' || body), ?) > 0" for _ in first)
+    rows = conn.execute(f"SELECT title, body FROM articles WHERE {where}", [a.lower() for a in first])
+    return any(q.matches_text(f"{r[0]}\n{r[1]}") for r in rows)
 
 
 def answer_matches(answer: str, expected: list[str]) -> bool:
@@ -102,15 +137,16 @@ def run_mode(
     results = []
     for q in questions:
         res = QuestionResult(question=q)
-        if not _in_db(conn, q.expect_url):
+        if not _in_db(conn, q):
             res.missing = True
             results.append(res)
             continue
         r = retrieve(conn, q.q, k=k, mode=mode, embedder=embedder, command="eval", reranker=reranker)
         res.mode = r.mode
         for i, h in enumerate(r.hits, 1):
-            if any(p in h.url for p in q.expect_url):
+            if q.matches_url(h.url) or q.matches_text(f"{h.title}\n{h.body}"):
                 res.rank = i
+                res.same_story = not q.matches_url(h.url)
                 break
         if answer_fn and q.answer_any:
             res.answer = answer_fn(q.q, r.hits)
@@ -176,17 +212,19 @@ def run_routes(cases: list[RouteCase], use_model: bool = True, model: str | None
     ])
 
 
-def record_mode_report(conn: sqlite3.Connection, rep: ModeReport, questions: int, rerank: bool = False) -> int:
+def record_mode_report(conn: sqlite3.Connection, rep: ModeReport, questions: int, rerank: bool = False,
+                       question_set: str | None = None) -> int:
     """Keep one retrieval score in eval_runs (the dashboard's eval history)."""
     return store.record_eval_run(
-        conn, "retrieval", questions, mode=rep.mode, k=rep.k, scored=len(rep.scored),
+        conn, "retrieval", questions, mode=rep.mode, k=rep.k, scored=len(rep.scored), question_set=question_set,
         hit1=rep.hit_rate(1), hit3=rep.hit_rate(3), hitk=rep.hit_rate(), mrr=rep.mrr,
         fallbacks=rep.fallbacks, answer_rate=rep.answer_rate, rerank=int(rerank),
     )
 
 
-def record_route_report(conn: sqlite3.Connection, rep: RouteReport, use_model: bool = True) -> int:
+def record_route_report(conn: sqlite3.Connection, rep: RouteReport, use_model: bool = True,
+                        question_set: str | None = None) -> int:
     return store.record_eval_run(
-        conn, "routes", len(rep.results), mode="rules+model" if use_model else "rules",
+        conn, "routes", len(rep.results), mode="rules+model" if use_model else "rules", question_set=question_set,
         scored=rep.correct, accuracy=rep.accuracy,
     )
