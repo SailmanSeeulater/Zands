@@ -1,0 +1,42 @@
+# Feeds that `zands ingest` reads. Each [[feed]] needs a unique `name` and a `url`.
+# Set `enabled = false` to skip a feed without deleting it.
+
+[[feed]]
+name = "BBC News - World"
+url = "https://feeds.bbci.co.uk/news/world/rss.xml"
+
+[[feed]]
+name = "BBC News - Top Stories"
+url = "https://feeds.bbci.co.uk/news/rss.xml"
+
+[[feed]]
+name = "NPR News"
+url = "https://feeds.npr.org/1001/rss.xml"
+
+[[feed]]
+name = "The Guardian - World"
+url = "https://www.theguardian.com/world/rss"
+
+[[feed]]
+name = "Al Jazeera"
+url = "https://www.aljazeera.com/xml/rss/all.xml"
+
+[[feed]]
+name = "PBS NewsHour"
+url = "https://www.pbs.org/newshour/feeds/rss/headlines"
+
+[[feed]]
+name = "DW - All"
+url = "https://rss.dw.com/rdf/rss-en-all"
+
+[[feed]]
+name = "Ars Technica"
+url = "https://feeds.arstechnica.com/arstechnica/index"
+
+[[feed]]
+name = "The Verge"
+url = "https://www.theverge.com/rss/index.xml"
+
+[[feed]]
+name = "TechCrunch"
+url = "https://techcrunch.com/feed/"
