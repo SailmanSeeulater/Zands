@@ -354,6 +354,28 @@ post-retrieval gate and route logging; SearXNG web fallback (optionally saved in
 LLM-free daily digest in prompts and as its own route; MCP server (`search_news`,
 `latest_digest`); an opt-in reranker (measured, off by default).
 
+**Next: `zands dashboard` (planned, not built).** One local page of charts over `news.db`, for
+trends that Datasette's tables don't show. Panels:
+- articles ingested over time, per feed
+- feed health: last success, failures, new articles per run
+- today's digest: the stories and how many outlets covered each
+- top entities and topics over time
+- retrieval log: questions per day, router routes, keyword vs vector vs web hits, empty retrievals
+- eval history: hit@1 and MRR per run, so regressions show up
+- coverage and size: chunks vs vectors, DB file size, fact overrides current vs expired
+
+Implementation choice: a stdlib `http.server` on 127.0.0.1 that serves one static HTML page and a
+few read-only JSON endpoints (one SQL query per panel, opened with `mode=ro`), with Vega-Lite
+vendored into the package so it works offline. That adds no Python dependencies and keeps the
+panel queries next to the existing canned queries in `ui.py`. Datasette plugins
+(datasette-dashboards, datasette-vega) were the alternative. They were set aside because they add
+dependencies tied to Datasette's plugin API and are harder to test offline.
+
+Three panels need data Zands doesn't keep yet:
+- *Per-run feed history:* `feeds.last_new_items` holds only the latest run, so this needs an `ingest_runs` table.
+- *Eval history:* `zands eval` prints its results but doesn't store them, so this needs an `eval_runs` table.
+- *Entities and topics:* nothing extracts them today. Start with headline word counts; real entity extraction can come later.
+
 **Possible next steps.**
 - Structured APIs for the `web` route's live data (weather, exchange rates), instead of scraping search results.
 - Retention: drop articles older than N months and compact the file (the index grows about 1–2 GB a year).
