@@ -1,0 +1,132 @@
+# Known-answer test set for `zands eval`.
+#
+# Each [[question]] has:
+#   q          the question, as a user would ask it
+#   expect_url substrings of article URLs; retrieval is a hit if any top-k chunk comes from a matching article
+#   answer_any (optional) words/phrases; with `zands eval --answers` the model's answer must contain one
+#   style      "keyword" (shares words with the headline) or "paraphrase" (deliberately avoids them)
+#
+# Built from the articles ingested on 2026-11-24. Articles are never deleted, so these stay valid
+# for this database; a question whose articles aren't in the database is reported as "missing"
+# rather than as a miss. Add new questions as the news moves on; don't tune retrieval against
+# questions written after looking at what it retrieves.
+
+[[question]]
+q = "Which Star Trek actor died, and how old was he?"
+expect_url = ["star-trek-star-patrick-stewart-dies"]
+answer_any = ["86"]
+style = "keyword"
+
+[[question]]
+q = "When does Bangladesh's ousted former prime minister plan to come home?"
+expect_url = ["sheikh-hasina-plans-to-return"]
+answer_any = ["December 16", "16 December", "Dec 16"]
+style = "paraphrase"
+
+[[question]]
+q = "What did Baghdad order about oil production in the semi-autonomous north?"
+expect_url = ["iraq-orders-takeover-of-oilfields"]
+answer_any = ["Kurdish", "Kurdistan"]
+style = "paraphrase"
+
+[[question]]
+q = "How many people died from hot weather in England this summer?"
+expect_url = ["summer-heat-deaths-record-high-england"]
+answer_any = ["5,258", "5258"]
+style = "paraphrase"
+
+[[question]]
+q = "How did the COP31 climate summit end?"
+expect_url = ["cop31-ends-in-failure", "cop31-climate-talks-end-without-consensus"]
+answer_any = ["fossil", "consensus", "failure", "split"]
+style = "keyword"
+
+[[question]]
+q = "How far from Earth is NASA's oldest interstellar probe now?"
+expect_url = ["voyager-1-reaches-a-light-day"]
+answer_any = ["light-day", "light day"]
+style = "paraphrase"
+
+[[question]]
+q = "Which Mexican drug cartel boss was captured by troops?"
+expect_url = ["el-chapo-isidro"]
+answer_any = ["Isidro"]
+style = "keyword"
+
+[[question]]
+q = "What penalties is Canberra threatening social media platforms with?"
+expect_url = ["australia-warns-tech-giants"]
+answer_any = ["fine", "billion"]
+style = "paraphrase"
+
+[[question]]
+q = "Why are German factory workers walking off the job?"
+expect_url = ["metalworkers-go-on-strike"]
+answer_any = ["pay", "wage", "IG Metall"]
+style = "paraphrase"
+
+[[question]]
+q = "Why are US states suing SpaceX over Grok?"
+expect_url = ["states-sue-spacex"]
+answer_any = ["image", "porn", "sex"]
+style = "keyword"
+
+[[question]]
+q = "Did a Russian aircraft enter Finland's airspace?"
+expect_url = ["russian-helicopter-suspected-of-violating-finnish-airspace"]
+answer_any = ["helicopter"]
+style = "paraphrase"
+
+[[question]]
+q = "What did Amazon reveal about attackers using autonomous AI to break into systems?"
+expect_url = ["amazon-says-hackers-ai-agents"]
+answer_any = ["zero-day", "0-day", "root", "university"]
+style = "paraphrase"
+
+[[question]]
+q = "Who is back running Nvidia, and why is it controversial?"
+expect_url = ["huang"]
+answer_any = ["Huang"]
+style = "keyword"
+
+[[question]]
+q = "How much is CrowdStrike paying for Zscaler?"
+expect_url = ["crowdstrike-to-acquire-zscaler"]
+answer_any = ["44"]
+style = "keyword"
+
+[[question]]
+q = "Where did Ukraine's naval drones hit a Russian warship?"
+expect_url = ["ukraines-sea-drones-blow-up-russian-warship", "russian-warships-off-libya", "keep-sinking-russian-ships"]
+answer_any = ["Benghazi", "Libya"]
+style = "keyword"
+
+[[question]]
+q = "Who will be the first foreigner to visit China's space station?"
+expect_url = ["pakistani-astronaut"]
+answer_any = ["Pakistan", "Zeeshan"]
+style = "paraphrase"
+
+[[question]]
+q = "What happened to the Congolese military plane rebels say they shot down?"
+expect_url = ["cwy7r5z8gg65o"]
+answer_any = ["Cessna", "contact", "missing"]
+style = "keyword"
+
+[[question]]
+q = "How many were hurt in the car bombing in Colombia?"
+expect_url = ["cjqlq2n4np7do"]
+answer_any = ["20"]
+style = "keyword"
+
+[[question]]
+q = "Which companies started testing self-driving taxis with no safety driver?"
+expect_url = ["uber-nuro-lucid-driverless-robotaxi"]
+answer_any = ["Uber", "Nuro", "Lucid"]
+style = "paraphrase"
+
+[[question]]
+q = "Which central bank's former directors profited from slavery?"
+expect_url = ["bank-of-england-directors-illegally-profited"]
+answer_any = ["Bank of England"]
+style = "paraphrase"
