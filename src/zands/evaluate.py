@@ -95,6 +95,7 @@ def run_mode(
     k: int = 8,
     embedder=None,
     answer_fn=None,
+    reranker=None,
 ) -> ModeReport:
     """Score one retrieval mode. answer_fn(question, hits) -> str enables answer checks."""
     results = []
@@ -104,7 +105,7 @@ def run_mode(
             res.missing = True
             results.append(res)
             continue
-        r = retrieve(conn, q.q, k=k, mode=mode, embedder=embedder, command="eval")
+        r = retrieve(conn, q.q, k=k, mode=mode, embedder=embedder, command="eval", reranker=reranker)
         res.mode = r.mode
         for i, h in enumerate(r.hits, 1):
             if any(p in h.url for p in q.expect_url):
@@ -115,3 +116,60 @@ def run_mode(
             res.answer_ok = answer_matches(res.answer, q.answer_any)
         results.append(res)
     return ModeReport(mode=mode, k=k, results=results)
+
+
+# ---------------------------------------------------------------- router
+
+
+@dataclass
+class RouteCase:
+    q: str
+    expect: str
+    accept: list[str] = field(default_factory=list)
+
+
+@dataclass
+class RouteResult:
+    case: RouteCase
+    got: object  # route.RouteDecision
+
+    @property
+    def ok(self) -> bool:
+        return self.got.route == self.case.expect or self.got.route in self.case.accept
+
+
+@dataclass
+class RouteReport:
+    results: list[RouteResult]
+
+    @property
+    def correct(self) -> int:
+        return sum(r.ok for r in self.results)
+
+    @property
+    def accuracy(self) -> float:
+        return self.correct / len(self.results) if self.results else 0.0
+
+    @property
+    def by_method(self) -> dict[str, int]:
+        out: dict[str, int] = {}
+        for r in self.results:
+            out[r.got.method] = out.get(r.got.method, 0) + 1
+        return out
+
+
+def load_routes(path: str | Path) -> list[RouteCase]:
+    with open(path, "rb") as fh:
+        data = tomllib.load(fh)
+    return [RouteCase(q=r["q"], expect=r["expect"], accept=list(r.get("accept", []))) for r in data.get("route", [])]
+
+
+def run_routes(cases: list[RouteCase], use_model: bool = True, model: str | None = None, base_url: str | None = None,
+               classifier=None) -> RouteReport:
+    """Router decisions before the retrieval gate (the gate needs a database and is tested separately)."""
+    from .route import route
+
+    return RouteReport([
+        RouteResult(c, route(c.q, use_model=use_model, model=model, base_url=base_url, classifier=classifier))
+        for c in cases
+    ])

@@ -1,0 +1,115 @@
+# Router test set for `zands eval --routes`: question -> expected route, before the
+# post-retrieval gate. `accept` lists other routes that are also fine for borderline questions.
+# Written before running the router on them.
+
+[[route]]
+q = "What happened with Nvidia's CEO this week?"
+expect = "news"
+
+[[route]]
+q = "Who won the Arsenal match tonight?"
+expect = "news"
+
+[[route]]
+q = "Is Jensen Huang back at Nvidia?"
+expect = "news"
+
+[[route]]
+q = "What did Iraq decide about the Kurdish oilfields?"
+expect = "news"
+
+[[route]]
+q = "Why are German metalworkers on strike?"
+expect = "news"
+
+[[route]]
+q = "Has COP31 reached a deal on fossil fuels?"
+expect = "news"
+
+[[route]]
+q = "When is Sheikh Hasina returning to Bangladesh?"
+expect = "news"
+
+[[route]]
+q = "Did Russia violate Finnish airspace?"
+expect = "news"
+
+[[route]]
+q = "Who is the prime minister of the UK?"
+expect = "news"
+accept = ["knowledge"]
+
+[[route]]
+q = "What is a central bank?"
+expect = "knowledge"
+
+[[route]]
+q = "How does a jet engine work?"
+expect = "knowledge"
+
+[[route]]
+q = "Who wrote War and Peace?"
+expect = "knowledge"
+
+[[route]]
+q = "What is the capital of Mongolia?"
+expect = "knowledge"
+
+[[route]]
+q = "Explain photosynthesis"
+expect = "knowledge"
+
+[[route]]
+q = "Why is the sky blue?"
+expect = "knowledge"
+
+[[route]]
+q = "When did the Berlin Wall fall?"
+expect = "knowledge"
+
+[[route]]
+q = "What were the causes of World War I?"
+expect = "knowledge"
+
+[[route]]
+q = "What's the weather in Tokyo tomorrow?"
+expect = "web"
+
+[[route]]
+q = "What is the price of bitcoin right now?"
+expect = "web"
+
+[[route]]
+q = "What's the euro to dollar exchange rate?"
+expect = "web"
+
+[[route]]
+q = "What time does the Louvre open on Sundays?"
+expect = "web"
+accept = ["knowledge"]
+
+[[route]]
+q = "What's on my calendar tomorrow?"
+expect = "none"
+
+[[route]]
+q = "Should I sell my Nvidia shares?"
+expect = "none"
+accept = ["news"]
+
+[[route]]
+q = "Will it be a good year for my startup?"
+expect = "none"
+
+# Added with the digest route (2026-11-24).
+[[route]]
+q = "What are today's top stories?"
+expect = "digest"
+
+[[route]]
+q = "Catch me up on the headlines"
+expect = "digest"
+
+[[route]]
+q = "What's the latest news on Nvidia?"
+expect = "news"

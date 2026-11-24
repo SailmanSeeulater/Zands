@@ -108,6 +108,7 @@ class Retrieval:
     note: str | None = None  # why hybrid/vector fell back, if it did
     log_id: int | None = None
     candidates: dict = field(default_factory=dict)  # retriever -> candidate count
+    top_similarity: float | None = None  # 1 - cosine distance of the best vector candidate (None without vectors)
 
 
 def _age_days(timestamp: str | None, now: datetime) -> float | None:
@@ -252,6 +253,7 @@ def retrieve(
     now: datetime | None = None,
     log: bool = True,
     command: str | None = None,
+    reranker=None,
 ) -> Retrieval:
     """Top-k chunks for a question.
 
@@ -287,10 +289,14 @@ def retrieve(
     if query and effective != "vector":
         keyword_rows = keyword_candidates(conn, query, candidates)
 
-    hits = cap_per_article(fuse(keyword_rows, vector_rows, now, recency_weight), k, max_per_article)
+    fused = fuse(keyword_rows, vector_rows, now, recency_weight)
+    if reranker is not None and len(fused) > 1:
+        fused = reranker(question, fused)  # reorders the head of the list; see rerank.py
+    hits = cap_per_article(fused, k, max_per_article)
     result = Retrieval(
         hits=hits, mode=effective, query=query, note=note,
         candidates={"keyword": len(keyword_rows), "vector": len(vector_rows)},
+        top_similarity=(1.0 - vector_rows[0]["distance"]) if vector_rows else None,
     )
     if log:
         result.log_id = store.log_retrieval(
