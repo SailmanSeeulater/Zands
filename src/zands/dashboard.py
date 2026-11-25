@@ -242,7 +242,9 @@ def retrievals(conn: sqlite3.Connection, now: datetime | None = None, days: int 
     if first is None:
         return {"days": [], "by_command": [], "routes": [], "modes": [], "hit_sources": None, "empty": 0,
                 "empty_recent": [], "total": 0, "collecting_since": _collecting(conn, "hit_sources")}
-    start = max(utc(first), now - timedelta(days=days - 1))
+    # Never start after `now`: a log row stamped later (clock skew, or a test's fixed `now`)
+    # would otherwise leave no days at all and crash on day_keys[0].
+    start = min(max(utc(first), now - timedelta(days=days - 1)), now)
     day_keys = _days(start, now)
     index = {d: i for i, d in enumerate(day_keys)}
     by_command: dict[str, list[int]] = {}

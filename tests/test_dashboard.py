@@ -45,6 +45,10 @@ def db(tmp_path):
     retrieve(conn, "Nvidia", mode="keyword", command="eval")  # left out of the retrieval panel
     log_id = store.log_retrieval(conn, "What are today's top stories?", None, [], 8, command="ask")
     store.set_log_route(conn, log_id, "digest", "rule")  # never searches, so it isn't a miss
+    # The log stamps rows with the real clock; pin them to the test's NOW so the panels see them
+    # on any day the suite runs.
+    conn.execute("UPDATE retrieval_log SET created_at = ?", (NOW.strftime("%Y-%m-%dT%H:%M:%SZ"),))
+    conn.commit()
     conn.close()
     return path
 
