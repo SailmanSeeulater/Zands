@@ -47,6 +47,14 @@ def test_lists_tools(db_path):
     assert set(tools["search_news"].input_schema["properties"]) == {"query", "k", "mode"}
 
 
+def test_tools_are_marked_read_only(db_path):
+    # Clients such as zwans run read-only MCP tools without asking; without the hint they block.
+    listed, _ = call(db_path, "latest_digest", {})
+    for t in listed.tools:
+        assert t.annotations is not None and t.annotations.read_only_hint is True, t.name
+        assert t.annotations.destructive_hint is False, t.name
+
+
 def test_search_news(db_path):
     _, res = call(db_path, "search_news", {"query": "magma eruption", "k": 1})
     data = payload(res)

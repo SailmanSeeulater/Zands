@@ -12,6 +12,7 @@ Logging goes to stderr: stdout carries the protocol.
 from __future__ import annotations
 
 from mcp.server.mcpserver import MCPServer
+from mcp.types import ToolAnnotations
 
 from . import digest as digestlib
 from . import store
@@ -25,6 +26,11 @@ INSTRUCTIONS = (
     "feeds published, so say so when nothing relevant comes back."
 )
 
+# Both tools only read the local index. (Searches append to retrieval_log and a missing digest
+# gets built, but that is Zands' own bookkeeping, not a change to anything the client owns.)
+# The hint lets clients such as zwans run them without asking each time.
+READ_ONLY = ToolAnnotations(read_only_hint=True, destructive_hint=False, open_world_hint=False)
+
 
 def build_server(db_path: str, embedder=None) -> MCPServer:
     server = MCPServer(name="zands", title="Zands news", instructions=INSTRUCTIONS, version="0.3.0")
@@ -33,7 +39,7 @@ def build_server(db_path: str, embedder=None) -> MCPServer:
     def connect():
         return store.connect(db_path)
 
-    @server.tool(title="Search news")
+    @server.tool(title="Search news", annotations=READ_ONLY)
     def search_news(query: str, k: int = DEFAULT_K, mode: str = "hybrid") -> dict:
         """Search the local news index for chunks relevant to a question or keywords.
 
@@ -69,7 +75,7 @@ def build_server(db_path: str, embedder=None) -> MCPServer:
             ],
         }
 
-    @server.tool(title="Today's top stories")
+    @server.tool(title="Today's top stories", annotations=READ_ONLY)
     def latest_digest() -> str:
         """Today's top news stories: headlines grouped across outlets, ranked by how many cover them."""
         conn = connect()
