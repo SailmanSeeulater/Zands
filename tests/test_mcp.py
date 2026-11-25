@@ -57,21 +57,45 @@ def test_tools_are_marked_read_only(db_path):
 
 def test_search_news(db_path):
     _, res = call(db_path, "search_news", {"query": "magma eruption", "k": 1})
-    data = payload(res)
-    assert data["mode"] == "hybrid"
-    [hit] = data["results"]
-    assert hit["title"] == "Iceland evacuates town" and hit["url"] == "https://n.example/0"
-    assert "Grindavik" in hit["text"] and hit["published_at"] == "2099-01-01T00:00:00Z"
+    assert not res.is_error
+    text = res.content[0].text
+    assert "[1] Iceland evacuates town\nN, 2099-01-01 | https://n.example/0\n" in text
+    assert "Grindavik" in text and "[2]" not in text
+    assert "Cite the outlet and date" in text
     conn = store.connect(db_path)
     assert conn.execute("SELECT command FROM retrieval_log").fetchone()[0] == "mcp"
 
 
-def test_search_news_validates_mode(db_path):
-    _, res = call(db_path, "search_news", {"query": "x", "mode": "semantic"})
-    assert res.is_error
+def test_search_news_tolerates_made_up_arguments(db_path):
+    # Small models invent modes and pass k as text; the call should still work.
+    _, res = call(db_path, "search_news", {"query": "interest rates", "mode": "semantic", "k": "3"})
+    assert not res.is_error and "Bank holds rates" in res.content[0].text
+
+
+def test_search_news_says_plainly_when_nothing_matches(db_path):
+    _, res = call(db_path, "search_news", {"query": "zebra crossing", "mode": "keyword"})
+    assert "No news articles in the local index match" in res.content[0].text
+
+
+def test_excerpts_are_short_and_cut_at_a_word():
+    from zands.mcp_server import _excerpt
+
+    text = " ".join(["word"] * 400)
+    out = _excerpt(text, 100)
+    assert len(out) <= 102 and out.endswith(" …") and "wor …" not in out
+    assert _excerpt("short  text\n here") == "short text here"
+
+
+def test_instructions_say_when_to_use_the_tools(db_path):
+    from zands.mcp_server import INSTRUCTIONS
+
+    assert "search_news" in INSTRUCTIONS and "latest_digest" in INSTRUCTIONS
+    listed, _ = call(db_path, "latest_digest", {})
+    desc = {t.name: t.description for t in listed.tools}
+    assert "Use it before answering" in desc["search_news"]
 
 
 def test_latest_digest_builds_on_first_use(db_path):
     _, res = call(db_path, "latest_digest", {})
     text = res.content[0].text
-    assert text.startswith("Top stories") and "Iceland evacuates town" in text
+    assert text.startswith("(Today is ") and "Top stories" in text and "Iceland evacuates town" in text

@@ -242,9 +242,16 @@ headline. Without vectors, stories are grouped by headline word overlap. The dig
 directly.
 
 **MCP server** (`src/zands/mcp_server.py`). `zands mcp` serves two tools over stdio:
-- `search_news(query, k=8, mode="hybrid")`: the top chunks with title, source, date, URL and
-  text, plus when the index was last updated;
-- `latest_digest()`: today's top stories.
+- `search_news(query, k=5, mode="hybrid")`: the top hits as numbered plain text (title,
+  outlet, date, URL and a ~700-character excerpt), plus when the index was last updated;
+- `latest_digest()`: today's top stories, with today's date.
+
+Both are marked read-only, so clients that ask before other tools run them straight away. The
+server's instructions and the tool descriptions say *when* to use them (anything about recent
+or ongoing events, before answering from memory), since small local models rarely work that
+out from a tool's name. Results are short plain text, not JSON: five hits are about 1,000
+tokens instead of 5,000, which a 7B model reads and quotes far more reliably. An unknown
+`mode` falls back to hybrid instead of failing the call.
 
 The client does its own answering. Searches are logged with command `mcp`. To connect an MCP
 client (for example zwans), give it absolute paths:
