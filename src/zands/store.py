@@ -13,7 +13,7 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 log = logging.getLogger(__name__)
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 EMBED_DIM = 768  # nomic-embed-text
 
 SCHEMA = """
@@ -158,6 +158,33 @@ CREATE TABLE IF NOT EXISTS meta (
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL
 );
+
+-- The public-apis list (github.com/public-apis/public-apis), so a model can find an API for a
+-- need no built-in tool covers. Refreshed with `zands apis update`.
+CREATE TABLE IF NOT EXISTS api_catalog (
+    id          INTEGER PRIMARY KEY,
+    name        TEXT NOT NULL,
+    url         TEXT NOT NULL,                   -- the API's docs / home page
+    description TEXT NOT NULL,
+    category    TEXT NOT NULL,
+    auth        TEXT NOT NULL,                   -- '' when it needs no key, else apiKey / OAuth / ...
+    https       INTEGER NOT NULL,
+    cors        TEXT NOT NULL,
+    UNIQUE (name, url)
+);
+CREATE VIRTUAL TABLE IF NOT EXISTS api_catalog_fts USING fts5(
+    name, description, category,
+    content='api_catalog', content_rowid='id',
+    tokenize='porter unicode61 remove_diacritics 2'
+);
+CREATE TRIGGER IF NOT EXISTS api_catalog_ai AFTER INSERT ON api_catalog BEGIN
+    INSERT INTO api_catalog_fts(rowid, name, description, category)
+    VALUES (new.id, new.name, new.description, new.category);
+END;
+CREATE TRIGGER IF NOT EXISTS api_catalog_ad AFTER DELETE ON api_catalog BEGIN
+    INSERT INTO api_catalog_fts(api_catalog_fts, rowid, name, description, category)
+    VALUES ('delete', old.id, old.name, old.description, old.category);
+END;
 """
 
 # Created only when the sqlite-vec extension loads. Cosine distance on nomic vectors.

@@ -5,15 +5,17 @@ article in a single SQLite file, and answers questions about current events with
 [Ollama](https://ollama.com) model. A router decides whether a question needs the news index,
 the model's own knowledge, today's headlines or a live web search (through your own SearXNG),
 and the model answers only from what it was given, with citations. An MCP server lets coding
-agents search the index too.
+agents search the index too, and reach live data (weather, exchange rates, holidays, papers...)
+through free public APIs, including any no-key API in the
+[public-apis](https://github.com/public-apis/public-apis) list.
 
 The point is to give local, open-weight models knowledge of today's news without web search
-or fine-tuning: fetch on a schedule, search locally, ground the answer in what was fetched.
+or fine-tuning: fetch when the news is stale, search locally, ground the answer in what was fetched.
 
 ```
 feeds.toml ─► ingest ─► data/news.db ─────────────────────────────────────┐
- (launchd,    feedparser  articles, chunks, chunks_fts (FTS5)              │
-  hourly)     httpx       chunk_vec (sqlite-vec), facts, digests           │
+ (on demand   feedparser  articles, chunks, chunks_fts (FTS5)              │
+  when stale) httpx       chunk_vec (sqlite-vec), facts, digests           │
               trafilatura feeds, retrieval_log                             │
               nomic-embed → digest of today's top stories                  │
                                                                            ▼
@@ -25,12 +27,16 @@ question ─► router ──┬─ news ──────► hybrid retrieve (
                      └─ none ──────► "can't answer that"                            │
                      weak local match + SearXNG up ─► news+web ────────────────────┘
 
-zands mcp ─► search_news / latest_digest for coding agents (zwans) and other MCP clients
+zands mcp ─► search_news / latest_digest   (the news index)
+           ─► weather, convert_currency, wikipedia, define_word, public_holidays,
+              earthquakes, arxiv, books         (fixed free APIs)
+           ─► find_api ─► call_api              (any no-key API in the public-apis list)
+           for coding agents (zwans) and other MCP clients
 ```
 
 ## Setup
 
-Requirements: macOS (scheduling uses launchd; everything else also runs on Linux),
+Requirements: macOS or Linux (only the optional `zands schedule` needs macOS's launchd),
 [uv](https://docs.astral.sh/uv/), and Ollama running locally.
 
 ```bash
@@ -38,7 +44,13 @@ uv sync                          # .venv with Python 3.12 (uv-managed, not /usr/
 ollama pull qwen2.5:latest       # answer model
 ollama pull nomic-embed-text     # embedding model
 uv run zands ingest              # first fetch (also embeds the new chunks and builds the digest)
+uv run zands apis update         # load the public-apis list for find_api (about 2,400 APIs)
 ```
+
+After that there is nothing to schedule: `ask`, `search_news` and `latest_digest` fetch the
+feeds first when the newest article is more than 6 hours old (env `ZANDS_STALE_HOURS`, `0`
+turns it off). Run `zands ingest` yourself any time, or `zands schedule install` if you do
+want an hourly background fetch.
 
 Optional, for the web fallback: a SearXNG instance with the JSON format enabled. Zands uses
 `http://127.0.0.1:8888` by default (env `ZANDS_SEARXNG_URL`). Without one, everything works
@@ -71,7 +83,10 @@ uv run zands eval --routes               # router accuracy on eval/routes.toml
 uv run zands mcp                         # MCP server on stdio (see "MCP server" below)
 uv run zands ui                          # Datasette on http://127.0.0.1:8001/
 uv run zands dashboard                   # charts on http://127.0.0.1:8002/ (read-only)
-uv run zands schedule install            # hourly ingest via launchd (status / uninstall)
+uv run zands apis update                 # (re)load the public-apis catalog
+uv run zands apis find "cat facts"       # search it as find_api does (--all includes APIs needing a key)
+uv run zands apis try weather Tokyo      # run one live-data tool from the shell
+uv run zands schedule install            # optional hourly ingest via launchd (status / uninstall)
 uv run zands stats                       # counts and per-feed health
 ```
 
@@ -94,6 +109,7 @@ Useful flags:
 | `ask` | `--route auto\|news\|knowledge\|web\|digest` | force a route (default `auto`: let the router decide) |
 | `ask` | `--no-router` / `--router-model NAME` | rules only / router model (env `ZANDS_ROUTER_MODEL`, default `qwen2.5:latest`) |
 | `ask` | `--no-web` / `--save-web` | never use SearXNG / store fetched web pages in the index |
+| `ask` | `--no-refresh` | don't fetch feeds first, even when the news is stale |
 | `search`, `ask`, `eval` | `--rerank` | rerank candidates with the chat model (off by default: it measured worse, see Evaluation) |
 | `digest` | `--refresh` / `--hours N` | rebuild now / look-back window (default 24) |
 | Ollama users | `--ollama-url URL` | Ollama base URL (env `OLLAMA_HOST`, default `http://localhost:11434`) |
@@ -241,17 +257,54 @@ headline. Without vectors, stories are grouped by headline word overlap. The dig
 `ask` prompts as `TODAY'S HEADLINES [D1]...` for context, and answers `digest`-route questions
 directly.
 
-**MCP server** (`src/zands/mcp_server.py`). `zands mcp` serves two tools over stdio:
+**MCP server** (`src/zands/mcp_server.py`). `zands mcp` serves twelve tools over stdio.
+
+News, from the local index:
 - `search_news(query, k=5, mode="hybrid")`: the top hits as numbered plain text (title,
   outlet, date, URL and a ~700-character excerpt), plus when the index was last updated;
 - `latest_digest()`: today's top stories, with today's date.
 
-Both are marked read-only, so clients that ask before other tools run them straight away. The
-server's instructions and the tool descriptions say *when* to use them (anything about recent
-or ongoing events, before answering from memory), since small local models rarely work that
-out from a tool's name. Results are short plain text, not JSON: five hits are about 1,000
-tokens instead of 5,000, which a 7B model reads and quotes far more reliably. An unknown
-`mode` falls back to hybrid instead of failing the call.
+If the newest article is older than `ZANDS_STALE_HOURS` (6), both fetch the feeds first and say
+so at the top of the result. A file lock keeps two refreshes from running at once, and a failed
+refresh is a note, not an error: the search still runs on what is there.
+
+Live data, from fixed free APIs that need no key (`src/zands/apis/tools.py`):
+
+| Tool | Source |
+|---|---|
+| `weather(place, days=3)` | Open-Meteo forecast and air quality, local time; wttr.in if Open-Meteo fails |
+| `convert_currency(amount, from_currency, to_currency)` | Frankfurter (ECB rates); CoinGecko for crypto |
+| `wikipedia(topic)` | Wikipedia search, then the page summary |
+| `define_word(word)` | dictionaryapi.dev |
+| `public_holidays(country, year)` | Nager.Date, national holidays, next one marked |
+| `earthquakes(min_magnitude=4.5, period="day")` | USGS feeds |
+| `arxiv(query, max_results=5)` | arXiv search, every word required, by relevance |
+| `books(query, max_results=5)` | Open Library |
+
+Anything else, from the public-apis list (`src/zands/apis/catalog.py`):
+- `find_api(need)`: no-key HTTPS APIs whose name, description or category match the need
+  (every word first, then any word), with their docs URLs;
+- `call_api(url)`: a guarded GET, used to read an API's docs and then call its endpoint.
+
+`call_api` goes wherever the model points it, so it is fenced (`src/zands/apis/http.py`): HTTPS
+only, no credentials in the URL, no localhost or private, link-local or multicast addresses
+(checked after DNS resolution, and again on each of at most 3 redirects), bodies cut at 400 KB.
+It answers with plain text: JSON compacted, HTML reduced to its main text, cut at 6,000
+characters. Failures come back as text the model can act on, not as errors.
+
+Every tool except `call_api` is marked read-only, so clients that ask before other tools (zwans
+does) run them straight away; `call_api` is left for the client to ask about, as it does for its
+own web fetches. To let zwans run it without asking, add `allow = ["mcp__zands__call_api"]` to
+`~/.zwans/policy.toml`.
+
+The server's instructions give the model a short way to work when it lacks information: decide
+what is missing, call the most specific tool, fall back to `find_api` then `call_api`, check the
+result and retry with other words or another tool (up to three times), call a tool per part of a
+question, and answer with sources, or say what it tried. Each tool description starts with when
+to use it, since small local models rarely work that out from a tool's name. Results are short
+plain text, not JSON: five news hits are about 1,000 tokens instead of 5,000, which a 7B model
+reads and quotes far more reliably. Arguments small models get wrong (an unknown `mode`, `k` as
+text) fall back to defaults instead of failing the call.
 
 The client does its own answering. Searches are logged with command `mcp`. To connect an MCP
 client (for example zwans), give it absolute paths:
@@ -271,7 +324,7 @@ client (for example zwans), give it absolute paths:
 model to reorder the top 20 fused candidates; on any failure the original order is kept. It is
 off by default because it measured worse (see Evaluation).
 
-**Scheduling** (`src/zands/schedule.py`). `zands schedule install` writes
+**Scheduling** (`src/zands/schedule.py`, optional: news is otherwise fetched on demand). `zands schedule install` writes
 `~/Library/LaunchAgents/local.zands.ingest.plist` and loads it with `launchctl bootstrap`. The
 agent runs this venv's Python directly (`python -m zands.cli --db <abs> ingest --feeds <abs>`)
 every 60 minutes and once at load, at background priority, logging to
@@ -402,7 +455,7 @@ uv run pytest
 ```
 
 No test touches the network: Ollama is replaced by a deterministic fake embedder, HTTP by
-`httpx.MockTransport`, and `launchctl` by a recording stub. Covered:
+`httpx.MockTransport` or a fake fetch, and `launchctl` by a recording stub. Covered:
 - the chunker and the query sanitizer (including hostile FTS5 input)
 - URL normalization and idempotent inserts
 - keyword search on a fixture database (stemming, recency, per-article cap, retrieval logging)
@@ -418,6 +471,10 @@ No test touches the network: Ollama is replaced by a deterministic fake embedder
 - SearXNG client and page selection against a fake transport, saving web pages; digest
   grouping, ranking, rendering and the no-vector fallback; the MCP server through an in-process
   client; reranker parsing and failure handling
+- the API fence (schemes, credentials, private and resolved addresses, redirects, size cap),
+  readable output, every live-data tool against canned responses and its failure text, the
+  public-apis parser and catalog search, and on-demand refresh (fresh, stale, empty, locked,
+  failing)
 - the dashboard: every panel on a fixture database (hourly vs daily buckets, folding feeds into
   "Other", distinct digest outlets, headline topics, which questions count as misses), the
   "collecting since" empty states, recording of ingest/eval runs and per-hit retriever sources,
@@ -447,10 +504,14 @@ the panels that older databases had no data for. Datasette plugins were consider
 because they add dependencies. A charting library was set aside because the page would have
 needed a vendored bundle of about 1 MB.
 
+**Phase 5: live data and on-demand news (done).** Eight live-data MCP tools over free no-key
+APIs; the public-apis list as a searchable catalog (`find_api`) with a fenced `call_api`;
+server instructions for working out missing information step by step; feeds fetched when the
+news is stale instead of hourly.
+
 **Possible next steps.**
-- Structured APIs for the `web` route's live data (weather, exchange rates), instead of scraping search results.
+- Use the live-data tools in `zands ask` too (the `web` route still scrapes search results for weather and prices).
 - Retention: drop articles older than N months and compact the file (the index grows about 1–2 GB a year).
 - More known-answer and router questions as the news moves on, written before looking at results:
   harder paraphrases, and questions on crowded stories, where the modes actually differ.
 - Real entity extraction for the topics panel (headline word counts merge "Jensen" and "Huang" as separate topics).
-- Connect zwans to `zands mcp` (configuration on the zwans side).

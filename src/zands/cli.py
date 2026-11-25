@@ -16,6 +16,10 @@ from . import schedule as sched
 from . import store
 from .answer import DEFAULT_NUM_CTX, OllamaError, build_messages, default_model, default_ollama_url, stream_chat
 from .embed import EmbedError, OllamaEmbedder, default_embed_model, embed_pending, rebuild
+from .apis import catalog as api_catalog
+from .apis import tools as live_tools
+from .apis.http import FetchError
+from .freshness import refresh_if_stale
 from .ingest import load_feeds, run_ingest
 from .route import ROUTES, default_router_model
 from .search import DEFAULT_K, DEFAULT_MODE, MODES, RECENCY_WEIGHT, retrieve
@@ -147,6 +151,10 @@ def cmd_ask(args: argparse.Namespace) -> int:
     from .ask import plan
 
     conn = store.connect(args.db)
+    if not args.no_refresh:
+        r = refresh_if_stale(conn, args.db, embedder=_embedder(args))
+        if r.note:
+            print(f"note: {r.note}", file=sys.stderr)
     p = plan(
         conn, args.question, k=args.k, mode=args.mode,
         embedder=_embedder(args) if args.mode != "keyword" else None,
@@ -316,6 +324,30 @@ def cmd_digest(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_apis_update(args: argparse.Namespace) -> int:
+    conn = store.connect(args.db)
+    try:
+        n = api_catalog.update(conn)
+    except FetchError as exc:
+        print(f"catalog not updated: {exc}", file=sys.stderr)
+        return 1
+    free = conn.execute("SELECT COUNT(*) FROM api_catalog WHERE auth = '' AND https = 1").fetchone()[0]
+    print(f"catalog: {n} APIs, {free} of them free with no key over HTTPS (what find_api offers)")
+    return 0
+
+
+def cmd_apis_find(args: argparse.Namespace) -> int:
+    conn = store.connect(args.db)
+    rows = api_catalog.find(conn, args.need, n=15, include_keyed=args.all)
+    print(api_catalog.format_found(args.need, rows, api_catalog.count(conn)))
+    return 0
+
+
+def cmd_apis_try(args: argparse.Namespace) -> int:
+    print(live_tools.TOOLS[args.tool](*args.args))
+    return 0
+
+
 def cmd_mcp(args: argparse.Namespace) -> int:
     from .mcp_server import run
 
@@ -482,6 +514,7 @@ def build_parser() -> argparse.ArgumentParser:
     pa.add_argument("--no-web", action="store_true", help="never use the SearXNG web fallback")
     pa.add_argument("--save-web", action="store_true", help="store fetched web pages in the index")
     pa.add_argument("--show-prompt", action="store_true", help="print the full prompt before the answer")
+    pa.add_argument("--no-refresh", action="store_true", help="don't fetch feeds first even if the news is stale")
     pa.set_defaults(func=cmd_ask)
 
     pf = sub.add_parser("fact", help="manage fact overrides")
@@ -544,8 +577,21 @@ def build_parser() -> argparse.ArgumentParser:
     pd.add_argument("--hours", type=int, default=digestlib.DEFAULT_HOURS, help="look-back window (default 24)")
     pd.set_defaults(func=cmd_digest)
 
-    pm = sub.add_parser("mcp", help="run the MCP server on stdio (search_news, latest_digest)")
+    pm = sub.add_parser("mcp", help="run the MCP server on stdio (news, live-data and API tools)")
     pm.set_defaults(func=cmd_mcp)
+
+    pap = sub.add_parser("apis", help="the public-apis catalog the model searches with find_api")
+    apsub = pap.add_subparsers(dest="apis_cmd", required=True)
+    apu = apsub.add_parser("update", help="download the public-apis list into the catalog")
+    apu.set_defaults(func=cmd_apis_update)
+    apf = apsub.add_parser("find", help="search the catalog as find_api does")
+    apf.add_argument("need", help='what you need, e.g. "flight status"')
+    apf.add_argument("--all", action="store_true", help="include APIs that need a key or plain HTTP")
+    apf.set_defaults(func=cmd_apis_find)
+    apt = apsub.add_parser("try", help="run one live-data tool, e.g. `zands apis try weather Tokyo`")
+    apt.add_argument("tool", choices=sorted(live_tools.TOOLS))
+    apt.add_argument("args", nargs="*", help="its arguments, in order")
+    apt.set_defaults(func=cmd_apis_try)
 
     pst = sub.add_parser("stats", help="database counts and feed health")
     pst.set_defaults(func=cmd_stats)
