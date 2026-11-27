@@ -1,7 +1,7 @@
 """The ask planner: route -> retrieve -> gate -> facts/digest/web -> prompt. All offline."""
 
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -19,9 +19,11 @@ DOCS = [
 
 @pytest.fixture
 def db(conn):
+    # An hour old whenever the tests run: the digest and ask look at the last day by the real clock.
+    published = (datetime.now(timezone.utc) - timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
     for url, title, body in DOCS:
         store.insert_article(conn, store.Article(url=url, title=title, source="N", body=body, extraction="rss",
-                                                 published_at="2026-11-24T09:00:00Z"), [body])
+                                                 published_at=published), [body])
     embed_pending(conn, FakeEmbedder())
     return conn
 
