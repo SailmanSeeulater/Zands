@@ -9,6 +9,7 @@ import subprocess
 import sys
 import textwrap
 from datetime import date
+from pathlib import Path
 
 from . import digest as digestlib
 from . import facts as factlib
@@ -20,7 +21,7 @@ from .apis import tools as live_tools
 from .apis.http import FetchError
 from .embed import EmbedError, OllamaEmbedder, default_embed_model, embed_pending, rebuild
 from .freshness import refresh_if_stale
-from .ingest import load_feeds, run_ingest
+from .ingest import cutoff, keep_days, load_feeds, run_ingest
 from .route import ROUTES, default_router_model
 from .search import DEFAULT_K, DEFAULT_MODE, MODES, RECENCY_WEIGHT, retrieve
 
@@ -56,6 +57,8 @@ def cmd_ingest(args: argparse.Namespace) -> int:
         f"\n{report.new} new articles in {report.seconds:.0f}s; "
         f"database now has {s['articles']} articles / {s['chunks']} chunks / {s['vectors'] or 0} vectors ({args.db})"
     )
+    if report.pruned:
+        print(f"pruned {report.pruned} articles older than {keep_days()} days (ZANDS_KEEP_DAYS)")
     if embedder is not None:
         if report.embed_error:
             print(f"embedding skipped: {report.embed_error} (keyword search still works; next run retries)")
@@ -315,6 +318,32 @@ def _eval_routes(args: argparse.Namespace) -> int:
 # ---------------------------------------------------------------- digest / mcp
 
 
+def cmd_prune(args: argparse.Namespace) -> int:
+    days = args.keep_days if args.keep_days is not None else keep_days()
+    if days <= 0:
+        print("Say how many days of news to keep: --keep-days N, or ZANDS_KEEP_DAYS=N.", file=sys.stderr)
+        return 2
+    conn = store.connect(args.db)
+    before = cutoff(days)
+    if args.dry_run:
+        articles, chunks = store.prunable(conn, before)
+        print(f"would remove {articles} articles ({chunks} chunks) published before {before[:10]}")
+        return 0
+    size = _db_size(args.db)
+    articles, chunks = store.prune(conn, before)
+    print(f"removed {articles} articles ({chunks} chunks) published before {before[:10]}")
+    if args.vacuum:
+        conn.execute("VACUUM")
+        print(f"database: {size / 1e6:.1f} MB -> {_db_size(args.db) / 1e6:.1f} MB")
+    elif articles:
+        print("the file keeps its size until `zands prune --vacuum` (or VACUUM) compacts it")
+    return 0
+
+
+def _db_size(path: str | Path) -> int:
+    return sum(p.stat().st_size for p in Path(path).parent.glob(Path(path).name + "*") if p.is_file())
+
+
 def cmd_digest(args: argparse.Namespace) -> int:
     conn = store.connect(args.db)
     if args.refresh or digestlib.latest(conn) is None:
@@ -571,6 +600,12 @@ def build_parser() -> argparse.ArgumentParser:
     su.set_defaults(func=cmd_schedule_uninstall)
     st = ssub.add_parser("status", help="is it loaded, last exit code, recent log lines")
     st.set_defaults(func=cmd_schedule_status)
+
+    pp = sub.add_parser("prune", help="remove articles older than N days, and their chunks and vectors")
+    pp.add_argument("--keep-days", type=int, default=None, help="days of news to keep (env ZANDS_KEEP_DAYS)")
+    pp.add_argument("--dry-run", action="store_true", help="only say how many would go")
+    pp.add_argument("--vacuum", action="store_true", help="compact the file afterwards (takes a while on a big one)")
+    pp.set_defaults(func=cmd_prune)
 
     pd = sub.add_parser("digest", help="show today's top stories (rebuilt after every ingest)")
     pd.add_argument("--refresh", action="store_true", help="rebuild it now")

@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import html
 import logging
+import os
 import re
 import sqlite3
 import time
@@ -20,7 +21,7 @@ import tomllib
 import warnings
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import feedparser
@@ -67,6 +68,7 @@ class IngestReport:
     embedded: int = 0
     embed_error: str | None = None  # set when embedding was skipped or failed (keyword search still works)
     attempted_embed: bool = False
+    pruned: int = 0  # articles removed for being older than ZANDS_KEEP_DAYS
 
     @property
     def new(self) -> int:
@@ -254,6 +256,18 @@ def ingest_feed(
     return result
 
 
+def keep_days() -> int:
+    """How many days of articles to keep, from ZANDS_KEEP_DAYS: 0 (the default, or anything
+    that isn't a whole number) keeps them all."""
+    value = os.environ.get("ZANDS_KEEP_DAYS", "").strip()
+    return int(value) if value.isdigit() else 0
+
+
+def cutoff(days: int, now: datetime | None = None) -> str:
+    """The ISO timestamp `days` before now: articles older than it are pruned."""
+    return ((now or datetime.now(UTC)) - timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
 def run_ingest(
     conn: sqlite3.Connection,
     feeds: list[Feed],
@@ -261,8 +275,10 @@ def run_ingest(
     concurrency: int = 4,
     limit: int | None = None,
     embedder: Embedder | None = None,
+    keep: int | None = None,
 ) -> IngestReport:
-    """Ingest every feed in turn, then embed any chunks without a vector.
+    """Ingest every feed in turn, then embed any chunks without a vector, then prune articles
+    older than `keep` days (ZANDS_KEEP_DAYS when not given; 0 keeps everything).
 
     Article pages within a feed are fetched with `concurrency` workers;
     database writes stay on this thread. Embedding failures (Ollama down,
@@ -298,6 +314,11 @@ def run_ingest(
                 report.embed_error = str(exc)
         if report.embed_error:
             log.warning("embedding skipped: %s (keyword search still works; next run retries)", report.embed_error)
+    keep = keep_days() if keep is None else keep
+    if keep > 0:
+        report.pruned, _ = store.prune(conn, cutoff(keep))
+        if report.pruned:
+            log.info("pruned %d articles older than %d days", report.pruned, keep)
     report.seconds = time.monotonic() - start
     try:
         store.record_ingest_run(conn, report, started_at)

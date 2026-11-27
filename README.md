@@ -88,7 +88,14 @@ uv run zands apis find "cat facts"       # search it as find_api does (--all inc
 uv run zands apis try weather Tokyo      # run one live-data tool from the shell
 uv run zands schedule install            # optional hourly ingest via launchd (status / uninstall)
 uv run zands stats                       # counts and per-feed health
+uv run zands prune --keep-days 180       # drop older articles (--dry-run to count, --vacuum to compact)
 ```
+
+The index grows about 1–2 GB a year. `zands prune` removes articles published more than N days
+ago, with their chunks, keyword index entries and vectors; their URLs are remembered so the next
+ingest doesn't fetch them back. Set `ZANDS_KEEP_DAYS=N` to prune after every ingest instead
+(unset or `0`, the default, keeps everything). SQLite reuses the freed space, but the file only
+shrinks with `--vacuum`. Eval questions about pruned articles are reported as missing.
 
 Useful flags:
 
@@ -159,6 +166,7 @@ published date.
 | `chunks` | chunk text and word count, plus a copy of the article metadata |
 | `chunks_fts` | FTS5 external-content index over chunk title + body (porter stemming), kept in sync by triggers |
 | `chunk_vec` | sqlite-vec `vec0` table: one 768-d cosine vector per chunk, deleted with its chunk by trigger |
+| `pruned_urls` | articles `zands prune` removed, so ingest skips them: normalized URL, when |
 | `facts` | fact overrides: subject, attribute, value, valid_from, valid_to, source_url, added_at |
 | `retrieval_log` | every retrieval: time, command, question, FTS query, k, chunk ids in rank order, effective mode, facts used, route + reason, web URLs, which retriever had each hit in its own top k |
 | `digests` | today's top stories (one row per UTC day, rebuilt after every ingest) |
@@ -513,9 +521,11 @@ APIs; the public-apis list as a searchable catalog (`find_api`) with a fenced `c
 server instructions for working out missing information step by step; feeds fetched when the
 news is stale instead of hourly.
 
+**Phase 6: upkeep (done).** `zands prune` and `ZANDS_KEEP_DAYS` for retention; ruff and CI on
+Linux and macOS.
+
 **Possible next steps.**
 - Use the live-data tools in `zands ask` too (the `web` route still scrapes search results for weather and prices).
-- Retention: drop articles older than N months and compact the file (the index grows about 1–2 GB a year).
 - More known-answer and router questions as the news moves on, written before looking at results:
   harder paraphrases, and questions on crowded stories, where the modes actually differ.
 - Real entity extraction for the topics panel (headline word counts merge "Jensen" and "Huang" as separate topics).

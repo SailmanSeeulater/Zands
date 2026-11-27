@@ -13,7 +13,7 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 log = logging.getLogger(__name__)
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 EMBED_DIM = 768  # nomic-embed-text
 
 SCHEMA = """
@@ -42,6 +42,12 @@ CREATE TABLE IF NOT EXISTS articles (
     extraction   TEXT NOT NULL                   -- 'trafilatura' or 'rss'
 );
 CREATE INDEX IF NOT EXISTS articles_published ON articles(published_at);
+
+-- Articles removed by `zands prune`, so the next ingest doesn't fetch them straight back.
+CREATE TABLE IF NOT EXISTS pruned_urls (
+    url        TEXT PRIMARY KEY,                 -- normalized, as articles.url
+    pruned_at  TEXT NOT NULL
+);
 
 CREATE TABLE IF NOT EXISTS chunks (
     id           INTEGER PRIMARY KEY,
@@ -383,8 +389,40 @@ class Article:
 
 
 def article_exists(conn: sqlite3.Connection, url: str) -> bool:
-    row = conn.execute("SELECT 1 FROM articles WHERE url = ?", (normalize_url(url),)).fetchone()
+    """Whether the article is stored, or was and has been pruned (so ingest skips it)."""
+    key = normalize_url(url)
+    row = conn.execute(
+        "SELECT 1 FROM articles WHERE url = ? UNION ALL SELECT 1 FROM pruned_urls WHERE url = ?", (key, key)
+    ).fetchone()
     return row is not None
+
+
+PRUNABLE = "COALESCE(published_at, fetched_at) < ?"
+
+
+def prunable(conn: sqlite3.Connection, before: str) -> tuple[int, int]:
+    """How many articles, and chunks, `prune(conn, before)` would remove."""
+    row = conn.execute(
+        f"""SELECT COUNT(*), COALESCE(SUM((SELECT COUNT(*) FROM chunks c WHERE c.article_id = a.id)), 0)
+            FROM articles a WHERE {PRUNABLE}""",
+        (before,),
+    ).fetchone()
+    return row[0], row[1]
+
+
+def prune(conn: sqlite3.Connection, before: str) -> tuple[int, int]:
+    """Remove the articles published (or, without a date, fetched) before `before`, an ISO
+    timestamp, with their chunks, keyword index entries and vectors (the cascade and triggers
+    do those). Their URLs are remembered so ingest doesn't fetch them again. Returns how many
+    articles and chunks went."""
+    counts = prunable(conn, before)
+    with conn:
+        conn.execute(
+            f"INSERT OR IGNORE INTO pruned_urls(url, pruned_at) SELECT url, ? FROM articles WHERE {PRUNABLE}",
+            (utcnow(), before),
+        )
+        conn.execute(f"DELETE FROM articles WHERE {PRUNABLE}", (before,))
+    return counts
 
 
 def insert_article(conn: sqlite3.Connection, article: Article, chunks: list[str]) -> int | None:
