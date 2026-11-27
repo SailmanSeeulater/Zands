@@ -13,9 +13,13 @@ jobs:
         # Zands runs on macOS and Linux (only `zands schedule` is macOS-only, and its tests fake launchctl).
         os: [ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
+    env:
+      # uv's own Python: the runner's macOS Python can't load SQLite extensions, which vector
+      # search needs (the README says the same for a Mac).
+      UV_PYTHON_PREFERENCE: only-managed
     steps:
       - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v6
+      - uses: astral-sh/setup-uv@v7
       - run: uv sync --locked
       - run: uvx ruff@0.17.3 check .
       - run: uv run pytest -q
