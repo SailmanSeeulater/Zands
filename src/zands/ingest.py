@@ -20,7 +20,7 @@ import tomllib
 import warnings
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import feedparser
@@ -122,7 +122,7 @@ def entry_date(entry) -> str | None:
         t = entry.get(key)
         if t:
             try:
-                return datetime(*t[:6], tzinfo=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+                return datetime(*t[:6], tzinfo=UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
             except (TypeError, ValueError):
                 continue
     return None
@@ -215,7 +215,7 @@ def ingest_feed(
             todo.append(entry)
 
         extracted = pool.map(lambda e: fetch_and_extract(client, e["link"]), todo)
-        for entry, ext in zip(todo, extracted):
+        for entry, ext in zip(todo, extracted, strict=True):
             title = " ".join(html.unescape(entry.get("title", "")).split()) or "(untitled)"
             rss_text = entry_rss_text(entry)
             text = ext.text or ""

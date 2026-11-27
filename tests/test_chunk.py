@@ -1,3 +1,5 @@
+from itertools import pairwise
+
 from zands.chunk import chunk_text, split_paragraphs
 
 
@@ -50,7 +52,7 @@ def test_overlap_repeats_last_sentences():
     paras = [para(i, 100) for i in range(20)]
     chunks = chunk_text("\n\n".join(paras), overlap_words=40)
     assert len(chunks) > 1
-    for prev, nxt in zip(chunks, chunks[1:]):
+    for prev, nxt in pairwise(chunks):
         first = nxt.split("\n\n")[0]
         assert len(first.split()) <= 40
         assert prev.endswith(first)

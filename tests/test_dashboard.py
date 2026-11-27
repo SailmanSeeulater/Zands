@@ -5,14 +5,14 @@ import re
 import threading
 import urllib.error
 import urllib.request
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 
 from zands import dashboard, digest, facts, store
 from zands.search import Hit, hit_sources, retrieve
 
-NOW = datetime(2026, 11, 24, 18, 30, tzinfo=timezone.utc)
+NOW = datetime(2026, 11, 24, 18, 30, tzinfo=UTC)
 
 
 def add(conn, i, title, feed_id, source, fetched, published=None):
@@ -100,7 +100,7 @@ def test_feeds_status_and_collecting_runs(db):
     assert status["Broken"] == "failing"
     assert {f["name"]: f["articles"] for f in d["feeds"]} == {"BBC": 2, "Broken": 0, "NPR": 1}
     assert d["runs"] == [] and d["collecting_since"]  # no ingest runs recorded yet
-    stale = dashboard.feeds(dashboard.connect_ro(db), now=datetime(2030, 1, 1, tzinfo=timezone.utc))
+    stale = dashboard.feeds(dashboard.connect_ro(db), now=datetime(2030, 1, 1, tzinfo=UTC))
     assert {f["name"]: f["status"] for f in stale["feeds"]}["BBC"] == "stale"
 
 

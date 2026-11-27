@@ -1,9 +1,8 @@
 import httpx
 import pytest
+from fakes import FakeEmbedder
 
 from zands import store, web
-
-from fakes import FakeEmbedder
 
 PAGE_TEXT = " ".join(
     f"Tadej Pogacar won the Tour de France for a fifth time, matching the record, sentence {i}." for i in range(30)

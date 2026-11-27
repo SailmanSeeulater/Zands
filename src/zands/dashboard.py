@@ -11,7 +11,7 @@ import json
 import re
 import sqlite3
 from collections import Counter, defaultdict
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from importlib import resources
 from pathlib import Path
@@ -38,7 +38,7 @@ def utc(ts: str | None) -> datetime | None:
         dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
     except ValueError:
         return None
-    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+    return dt if dt.tzinfo else dt.replace(tzinfo=UTC)
 
 
 def iso(dt: datetime) -> str:
@@ -110,7 +110,7 @@ def coverage(conn: sqlite3.Connection, db_path: str | Path | None = None, now: d
 def ingested(conn: sqlite3.Connection, now: datetime | None = None) -> dict:
     """Articles stored over time, per feed: hourly for the last 48 h while the index is young,
     daily for the last 30 days once it has more than three days of history."""
-    now = now or datetime.now(timezone.utc)
+    now = now or datetime.now(UTC)
     first = utc(conn.execute("SELECT MIN(fetched_at) FROM articles").fetchone()[0])
     if first is None:
         return {"bucket": "hour", "buckets": [], "series": []}
@@ -150,7 +150,7 @@ def ingested(conn: sqlite3.Connection, now: datetime | None = None) -> dict:
 
 
 def feeds(conn: sqlite3.Connection, now: datetime | None = None) -> dict:
-    now = now or datetime.now(timezone.utc)
+    now = now or datetime.now(UTC)
     rows = conn.execute(
         """SELECT f.name, f.last_success_at, f.last_error, f.last_error_at, f.failure_count, f.last_new_items,
                   COUNT(a.id) AS articles, MAX(a.published_at) AS newest
@@ -207,7 +207,7 @@ def headline_terms(title: str) -> list[tuple[str, str]]:
 
 def topics(conn: sqlite3.Connection, now: datetime | None = None, days: int = 7, top: int = 12) -> dict:
     """Most frequent headline words per day: a cheap stand-in for entity extraction."""
-    now = now or datetime.now(timezone.utc)
+    now = now or datetime.now(UTC)
     start = now - timedelta(days=days - 1)
     rows = conn.execute(
         """SELECT title, substr(COALESCE(published_at, fetched_at), 1, 10) AS day FROM articles
@@ -236,7 +236,7 @@ def topics(conn: sqlite3.Connection, now: datetime | None = None, days: int = 7,
 
 def retrievals(conn: sqlite3.Connection, now: datetime | None = None, days: int = 30) -> dict:
     """Questions from search / ask / MCP (eval runs are left out: they'd swamp everything)."""
-    now = now or datetime.now(timezone.utc)
+    now = now or datetime.now(UTC)
     where = "command IS NOT 'eval'"
     first = conn.execute(f"SELECT MIN(created_at) FROM retrieval_log WHERE {where}").fetchone()[0]
     if first is None:
@@ -320,7 +320,7 @@ def panel(conn: sqlite3.Connection, name: str, db_path: str | Path | None = None
 
 
 def all_panels(conn: sqlite3.Connection, db_path: str | Path | None = None, now: datetime | None = None) -> dict:
-    now = now or datetime.now(timezone.utc)
+    now = now or datetime.now(UTC)
     data = {name: panel(conn, name, db_path, now) for name in PANELS}
     data["generated_at"] = iso(now)
     return data

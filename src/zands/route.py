@@ -94,7 +94,7 @@ class RouteDecision:
     reason: str
     method: str  # 'rule' | 'model' | 'default' | 'forced'
 
-    def with_gate(self, route: str, note: str) -> "RouteDecision":
+    def with_gate(self, route: str, note: str) -> RouteDecision:
         return RouteDecision(route=route, reason=f"{self.reason}; {note}", method=self.method)
 
 

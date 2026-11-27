@@ -9,7 +9,7 @@ import pytest
 from zands import store
 from zands.apis import catalog, http
 from zands.apis import tools as live
-from zands.apis.http import FetchError, Fetched
+from zands.apis.http import Fetched, FetchError
 
 PUBLIC = lambda host: ["93.184.216.34"]  # noqa: E731 - a public address for any host
 

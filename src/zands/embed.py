@@ -110,10 +110,12 @@ def embed_pending(
     for i in range(0, len(pending), batch_size):
         batch = pending[i : i + batch_size]
         vectors = embedder.embed([document_text(r["title"], r["body"]) for r in batch])
+        if len(vectors) != len(batch):
+            raise EmbedError(f"model returned {len(vectors)} vectors for {len(batch)} chunks")
         for v in vectors:
             if len(v) != store.EMBED_DIM:
                 raise EmbedError(f"model returned {len(v)}-d vectors; the index expects {store.EMBED_DIM}")
-        store.put_vectors(conn, [(r["id"], v) for r, v in zip(batch, vectors)])
+        store.put_vectors(conn, [(r["id"], v) for r, v in zip(batch, vectors, strict=True)])
         done += len(batch)
         if progress:
             log.info("embedded %d/%d chunks (%.0fs)", done, len(pending), time.monotonic() - start)

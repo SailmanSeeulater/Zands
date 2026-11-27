@@ -1,5 +1,6 @@
 import anyio
 import pytest
+from fakes import FakeEmbedder
 from mcp.client import Client
 from test_apis import FakeFetch
 
@@ -7,8 +8,6 @@ from zands import store
 from zands.embed import embed_pending
 from zands.freshness import Refresh
 from zands.mcp_server import build_server
-
-from fakes import FakeEmbedder
 
 
 @pytest.fixture

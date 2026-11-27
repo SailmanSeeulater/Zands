@@ -14,7 +14,7 @@ import logging
 import os
 import sqlite3
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from . import digest as digestlib
@@ -45,7 +45,7 @@ def age_hours(conn: sqlite3.Connection, now: datetime | None = None) -> float | 
     if not newest:
         return None
     fetched = datetime.fromisoformat(newest.replace("Z", "+00:00"))
-    return ((now or datetime.now(timezone.utc)) - fetched).total_seconds() / 3600
+    return ((now or datetime.now(UTC)) - fetched).total_seconds() / 3600
 
 
 @dataclass

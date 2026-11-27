@@ -1,10 +1,9 @@
 import json
 
 import pytest
+from fakes import FakeEmbedder
 
 from zands import evaluate, store
-
-from fakes import FakeEmbedder
 from zands.embed import embed_pending
 
 

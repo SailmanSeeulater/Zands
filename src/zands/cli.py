@@ -15,10 +15,10 @@ from . import facts as factlib
 from . import schedule as sched
 from . import store
 from .answer import DEFAULT_NUM_CTX, OllamaError, build_messages, default_model, default_ollama_url, stream_chat
-from .embed import EmbedError, OllamaEmbedder, default_embed_model, embed_pending, rebuild
 from .apis import catalog as api_catalog
 from .apis import tools as live_tools
 from .apis.http import FetchError
+from .embed import EmbedError, OllamaEmbedder, default_embed_model, embed_pending, rebuild
 from .freshness import refresh_if_stale
 from .ingest import load_feeds, run_ingest
 from .route import ROUTES, default_router_model

@@ -16,7 +16,7 @@ from __future__ import annotations
 import re
 import xml.etree.ElementTree as ET
 from collections.abc import Callable
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 from urllib.parse import quote
 from zoneinfo import ZoneInfo
 
@@ -139,7 +139,7 @@ def _weather_one(place: str, days: int, fetch: Fetch) -> str:
         lines.append(f"Air quality: US AQI {a['us_aqi']}, PM2.5 {a['pm2_5']} µg/m³, PM10 {a['pm10']} µg/m³")
     except (FetchError, KeyError, TypeError):
         pass
-    lines.append(f"Source: {source}, fetched {datetime.now(timezone.utc):%Y-%m-%d %H:%M} UTC.")
+    lines.append(f"Source: {source}, fetched {datetime.now(UTC):%Y-%m-%d %H:%M} UTC.")
     return "\n".join(lines)
 
 
@@ -166,7 +166,7 @@ def convert_currency(amount: float, from_currency: str, to_currency: str, fetch:
             price = entry.get(fiat.lower())
             if price is None:
                 return f"CoinGecko has no {coin} price in {fiat}."
-            when = datetime.fromtimestamp(entry.get("last_updated_at", 0), timezone.utc)
+            when = datetime.fromtimestamp(entry.get("last_updated_at", 0), UTC)
             value = amount / price if invert else amount * price
             return (
                 f"{amount:g} {src} = {_money(value)} {dst} (1 {coin} = {price:,} {fiat}). "
@@ -296,7 +296,7 @@ def earthquakes(min_magnitude: float = 4.5, period: str = "day", fetch: Fetch = 
         return f"No magnitude {m:g}+ earthquakes in the past {period} (USGS)."
     lines = [f"Magnitude {m:g}+ earthquakes in the past {period}: {len(quakes)} (USGS, strongest first)"]
     for p in quakes[:10]:
-        when = datetime.fromtimestamp(p["time"] / 1000, timezone.utc)
+        when = datetime.fromtimestamp(p["time"] / 1000, UTC)
         tsunami = ", tsunami alert" if p.get("tsunami") else ""
         lines.append(f"M{p['mag']} {p.get('place')} at {when:%Y-%m-%d %H:%M} UTC{tsunami}")
     return "\n".join(lines)

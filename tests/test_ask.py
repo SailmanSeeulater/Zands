@@ -1,15 +1,14 @@
 """The ask planner: route -> retrieve -> gate -> facts/digest/web -> prompt. All offline."""
 
 import json
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
+from fakes import FakeEmbedder
 
 from zands import ask, digest, facts, route, store, web
 from zands.embed import embed_pending
 from zands.search import Hit
-
-from fakes import FakeEmbedder
 
 DOCS = [
     ("https://n.example/volcano", "Iceland evacuates town", "Lava flowed toward Grindavik after the eruption."),
@@ -20,7 +19,7 @@ DOCS = [
 @pytest.fixture
 def db(conn):
     # An hour old whenever the tests run: the digest and ask look at the last day by the real clock.
-    published = (datetime.now(timezone.utc) - timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    published = (datetime.now(UTC) - timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
     for url, title, body in DOCS:
         store.insert_article(conn, store.Article(url=url, title=title, source="N", body=body, extraction="rss",
                                                  published_at=published), [body])
@@ -135,7 +134,7 @@ def test_forced_route(db, monkeypatch):
 def test_digest_route(db):
     p = run(db, "What are today's top stories?")
     assert p.route == "digest" and p.messages is None and "no digest" in p.reply
-    digest.refresh(db, now=datetime.now(timezone.utc))
+    digest.refresh(db, now=datetime.now(UTC))
     p = run(db, "What are today's top stories?")
     assert p.route == "digest" and p.hits == []
     system, user = (m["content"] for m in p.messages)
@@ -145,7 +144,7 @@ def test_digest_route(db):
 def test_facts_and_digest_ride_along(db, monkeypatch):
     monkeypatch.setattr(route, "STRONG_MATCH", 0.0)
     facts.add_fact(db, "European Central Bank", "main rate", "2.0%", valid_from="2026-11-01")
-    digest.refresh(db, now=datetime.now(timezone.utc))
+    digest.refresh(db, now=datetime.now(UTC))
     p = run(db, "What did the European Central Bank do with rates?", classifier=classify("news"))
     assert [f.value for f in p.facts] == ["2.0%"]
     user = p.messages[1]["content"]

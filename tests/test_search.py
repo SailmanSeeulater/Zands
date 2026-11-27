@@ -1,12 +1,12 @@
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 
 from zands import store
 from zands.search import recency_factor, search
 
-NOW = datetime(2026, 11, 24, 12, 0, tzinfo=timezone.utc)
+NOW = datetime(2026, 11, 24, 12, 0, tzinfo=UTC)
 
 FIXTURE = [
     # (url, title, published_at, chunks)

@@ -29,3 +29,18 @@ build-backend = "uv_build"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+
+[tool.ruff.lint]
+# Real problems and modern syntax; the long-line style stays as it is.
+select = ["E", "F", "W", "I", "B", "UP", "SIM"]
+# E501: the code keeps long lines. SIM105: try/except/pass with a comment saying why reads
+# better than contextlib.suppress. SIM905: the stopword lists are clearer as split() blocks.
+ignore = ["E501", "SIM105", "SIM905"]
+
+[tool.ruff.lint.per-file-ignores]
+# trafilatura is imported after a warnings filter that has to come first.
+"src/zands/ingest.py" = ["E402"]

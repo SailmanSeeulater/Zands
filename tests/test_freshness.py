@@ -2,7 +2,7 @@
 the search."""
 
 import fcntl
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
 import pytest
@@ -22,7 +22,7 @@ def db(tmp_path, monkeypatch):
 
 
 def fetched(conn, hours_ago):
-    when = (datetime.now(timezone.utc) - timedelta(hours=hours_ago)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    when = (datetime.now(UTC) - timedelta(hours=hours_ago)).strftime("%Y-%m-%dT%H:%M:%SZ")
     store.insert_article(conn, store.Article(url=f"https://n.example/{hours_ago}", title="t", source="N", body="b",
                                              extraction="rss", published_at=when), ["b"])
     conn.execute("UPDATE articles SET fetched_at = ?", (when,))

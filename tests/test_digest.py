@@ -1,12 +1,12 @@
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
+
+from fakes import FakeEmbedder
 
 from zands import digest, store
 from zands.embed import embed_pending
 
-from fakes import FakeEmbedder
-
-NOW = datetime(2026, 11, 24, 12, 0, tzinfo=timezone.utc)
+NOW = datetime(2026, 11, 24, 12, 0, tzinfo=UTC)
 
 ARTICLES = [
     # (source, title, body, published)
@@ -55,7 +55,7 @@ def test_render_and_save(conn):
 def test_latest_respects_max_age(conn):
     fill(conn)
     digest.refresh(conn, now=NOW)
-    later = datetime(2026, 11, 26, 12, 0, tzinfo=timezone.utc)
+    later = datetime(2026, 11, 26, 12, 0, tzinfo=UTC)
     assert digest.latest(conn, now=later) is None
     assert digest.latest(conn, max_age_hours=None, now=later) is not None
 

@@ -18,9 +18,8 @@ import math
 import sqlite3
 import struct
 from dataclasses import asdict, dataclass, field
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
-from . import store
 from .search import query_terms
 
 DEFAULT_HOURS = 24
@@ -63,7 +62,7 @@ def _unit(v: list[float]) -> list[float]:
 
 
 def _dot(a: list[float], b: list[float]) -> float:
-    return sum(x * y for x, y in zip(a, b))
+    return sum(x * y for x, y in zip(a, b, strict=True))
 
 
 def _recent_articles(conn: sqlite3.Connection, since: str) -> list[sqlite3.Row]:
@@ -92,7 +91,7 @@ def cluster(rows: list, similarity: float = STORY_SIMILARITY, overlap: float = T
         vec = _unit(list(struct.unpack(f"{len(r['embedding']) // 4}f", r["embedding"]))) if r["embedding"] else None
         words = set(query_terms(r["title"]))
         best, best_score = None, 0.0
-        for i, s in enumerate(stories):
+        for i in range(len(stories)):
             if vec is not None and centroids[i] is not None:
                 score = _dot(vec, centroids[i])
                 if score >= similarity and score > best_score:
@@ -114,13 +113,13 @@ def cluster(rows: list, similarity: float = STORY_SIMILARITY, overlap: float = T
             s.article_ids.append(r["id"])
             s.titles.append(r["title"])
             if vec is not None and sums[best] is not None:
-                sums[best] = [a + b for a, b in zip(sums[best], vec)]
+                sums[best] = [a + b for a, b in zip(sums[best], vec, strict=True)]
                 centroids[best] = _unit(sums[best])
             word_sets[best] |= words
             members[best].append((r["title"], vec))
     # Headline = the member closest to the story's mean (the most typical framing, rather than
     # whichever outlet happened to publish last, which is often a live blog).
-    for s, c, ms in zip(stories, centroids, members):
+    for s, c, ms in zip(stories, centroids, members, strict=True):
         scored = [(_dot(v, c), t) for t, v in ms if v is not None and c is not None]
         if scored:
             s.title = max(scored)[1]
@@ -132,7 +131,7 @@ def rank(stories: list[Story]) -> list[Story]:
 
 
 def build(conn: sqlite3.Connection, hours: int = DEFAULT_HOURS, max_items: int = MAX_ITEMS, now: datetime | None = None) -> Digest:
-    now = now or datetime.now(timezone.utc)
+    now = now or datetime.now(UTC)
     since = (now - timedelta(hours=hours)).strftime("%Y-%m-%dT%H:%M:%SZ")
     rows = _recent_articles(conn, since)
     stories = rank(cluster(rows))[:max_items]
@@ -175,6 +174,6 @@ def latest(conn: sqlite3.Connection, max_age_hours: float | None = 36, now: date
     row = conn.execute("SELECT * FROM digests ORDER BY created_at DESC LIMIT 1").fetchone()
     if row is None or max_age_hours is None:
         return row
-    now = now or datetime.now(timezone.utc)
-    created = datetime.strptime(row["created_at"], "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+    now = now or datetime.now(UTC)
+    created = datetime.strptime(row["created_at"], "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=UTC)
     return row if now - created <= timedelta(hours=max_age_hours) else None

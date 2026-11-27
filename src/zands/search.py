@@ -16,7 +16,7 @@ import math
 import re
 import sqlite3
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from . import store
 
@@ -115,7 +115,7 @@ def _age_days(timestamp: str | None, now: datetime) -> float | None:
     if not timestamp:
         return None
     try:
-        then = datetime.strptime(timestamp, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+        then = datetime.strptime(timestamp, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=UTC)
     except ValueError:
         return None
     return max(0.0, (now - then).total_seconds() / 86400)
@@ -264,7 +264,7 @@ def retrieve(
 
     if mode not in MODES:
         raise ValueError(f"mode must be one of {MODES}, not {mode!r}")
-    now = now or datetime.now(timezone.utc)
+    now = now or datetime.now(UTC)
     query = build_fts_query(question)
     note = None
     effective = mode

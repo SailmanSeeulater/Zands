@@ -20,7 +20,7 @@ are short plain text rather than JSON, so the answer can quote them.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from mcp.server.mcpserver import MCPServer
 from mcp.types import ToolAnnotations
@@ -145,7 +145,7 @@ def build_server(db_path: str, embedder=None, fetch=None, refresh=refresh_if_sta
             text = digestlib.refresh(conn).text if row is None or note else row["text"]
         finally:
             conn.close()
-        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        today = datetime.now(UTC).strftime("%Y-%m-%d")
         return f"(Today is {today}.)\n{note}{text}"
 
     # ------------------------------------------------------------ live data

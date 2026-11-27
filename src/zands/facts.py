@@ -36,8 +36,8 @@ class Fact:
     added_at: str
 
     @classmethod
-    def from_row(cls, row: sqlite3.Row) -> "Fact":
-        return cls(**{k: row[k] for k in row.keys()})
+    def from_row(cls, row: sqlite3.Row) -> Fact:
+        return cls(**{k: row[k] for k in row.keys()})  # noqa: SIM118 - iterating a Row gives its values
 
 
 def parse_day(value: str | date | None) -> str:

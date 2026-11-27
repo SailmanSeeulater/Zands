@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from zands import rerank, store
 from zands.search import Hit, retrieve
@@ -48,7 +48,7 @@ def test_retrieve_applies_reranker(conn):
     for i, body in enumerate(["interest rates held", "interest rates cut sharply", "rates"]):
         store.insert_article(conn, store.Article(url=f"https://x/{i}", title=f"T{i}", source="N", body=body,
                                                  extraction="rss", published_at="2026-11-24T00:00:00Z"), [body])
-    now = datetime(2026, 11, 24, 12, tzinfo=timezone.utc)
+    now = datetime(2026, 11, 24, 12, tzinfo=UTC)
     plain = retrieve(conn, "interest rates", mode="keyword", now=now)
     reversed_ = retrieve(conn, "interest rates", mode="keyword", now=now,
                          reranker=lambda q, hits: list(reversed(hits)))

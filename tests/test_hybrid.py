@@ -1,14 +1,13 @@
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
+from fakes import DownEmbedder, FakeEmbedder
 
 from zands import embed, store
 from zands.search import fuse, retrieve
 
-from fakes import DownEmbedder, FakeEmbedder
-
-NOW = datetime(2026, 11, 24, 12, 0, tzinfo=timezone.utc)
+NOW = datetime(2026, 11, 24, 12, 0, tzinfo=UTC)
 
 DOCS = [
     ("https://n.example/volcano", "Iceland evacuates town", "2026-11-23T09:00:00Z",
@@ -138,6 +137,16 @@ def test_model_mismatch_is_refused(embedded):
     embed.rebuild(embedded)
     assert store.vector_count(embedded) == 0
     assert embed.embed_pending(embedded, other) == 4
+
+
+def test_a_model_that_returns_too_few_vectors_is_refused(db):
+    class Short(FakeEmbedder):
+        def embed(self, texts):
+            return super().embed(texts)[:-1]  # one chunk left without a vector
+
+    with pytest.raises(embed.EmbedError, match="vectors for"):
+        embed.embed_pending(db, Short())
+    assert store.vector_count(db) == 0  # nothing half-stored
 
 
 def test_deleting_a_chunk_removes_its_vector(embedded):
