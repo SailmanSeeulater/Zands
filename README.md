@@ -452,7 +452,11 @@ looking at what retrieval returns.
 
 ```bash
 uv run pytest
+uvx ruff check .                 # lint: pyflakes, bugbear, import order, modern syntax
 ```
+
+CI runs both on Linux and macOS for every push to main and every pull request
+(`.github/workflows/ci.yml`).
 
 No test touches the network: Ollama is replaced by a deterministic fake embedder, HTTP by
 `httpx.MockTransport` or a fake fetch, and `launchctl` by a recording stub. Covered:
